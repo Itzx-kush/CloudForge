@@ -1,3 +1,4 @@
+import { useOverlayFocus } from './useOverlayFocus';
 import { NavLink } from 'react-router-dom';
 import {
   Activity,
@@ -44,6 +45,7 @@ export function Sidebar({
   activeWorkspace,
   onSelectWorkspace,
 }: SidebarProps) {
+  const ref = useOverlayFocus<HTMLElement>(isOpen, onClose);
   return (
     <>
       {isOpen && (
@@ -53,7 +55,7 @@ export function Sidebar({
           aria-hidden="true"
         />
       )}
-      <aside
+      <aside ref={ref} role={isOpen ? 'dialog' : undefined} aria-modal={isOpen || undefined}
         className={`cf-sidebar ${isOpen ? 'cf-sidebar--open' : ''}`}
         aria-label="Primary navigation"
       >
@@ -120,6 +122,8 @@ export function Sidebar({
             {NAV_ITEMS.map(({ to, label, icon: Icon, ...rest }) => (
               <li key={to}>
                 <NavLink
+                  title={label}
+                  aria-label={label}
                   to={to}
                   end={'end' in rest ? rest.end : false}
                   onClick={onClose}

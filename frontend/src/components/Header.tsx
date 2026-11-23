@@ -1,11 +1,12 @@
-import { LogOut, Menu, RefreshCw } from 'lucide-react';
+import { usePreferences, choices } from '../context/Preferences';
+import { PanelLeft, SunMoon, LogOut, Menu, RefreshCw } from 'lucide-react';
 import { StatusBadge, type BadgeTone } from './StatusBadge';
 import type { UserProfile, WorkspaceRole } from '../types/platform';
 import './Header.css';
 
 export interface HeaderProps {
   pageTitle: string;
-  onMenuToggle: () => void;
+  onMenuToggle: (trigger: HTMLButtonElement) => void;
   apiStatusLabel: string;
   apiStatusTone: BadgeTone;
   isRefreshing: boolean;
@@ -28,6 +29,7 @@ export function Header({
   isLoggingOut,
   onLogout,
 }: HeaderProps) {
+  const { prefs, update } = usePreferences();
   const initials = (user?.displayName || user?.username || 'U')
     .slice(0, 2)
     .toUpperCase();
@@ -38,11 +40,14 @@ export function Header({
         <button
           type="button"
           className="btn cf-header__menu-btn"
-          onClick={onMenuToggle}
+          onClick={event => onMenuToggle(event.currentTarget)}
+          aria-haspopup="dialog"
           aria-label="Open navigation menu"
         >
           <Menu size={18} />
         </button>
+        <button className="btn cf-rail-control" onClick={() => update('sidebar', prefs.sidebar === 'expanded' ? 'collapsed' : 'expanded')}
+          aria-label={prefs.sidebar === 'expanded' ? 'Collapse sidebar' : 'Expand sidebar'} title={prefs.sidebar === 'expanded' ? 'Collapse sidebar' : 'Expand sidebar'}><PanelLeft size={17} /></button>
         <div className="cf-header__breadcrumb">
           <span className="cf-header__root">CloudForge</span>
           <span className="cf-header__sep" aria-hidden="true">
@@ -53,6 +58,13 @@ export function Header({
       </div>
 
       <div className="cf-header__right">
+        <label className="cf-theme-control" title={`Theme: ${prefs.theme}`}>
+          <SunMoon size={17} aria-hidden="true" />
+          <select aria-label="Color theme" value={prefs.theme} onChange={e => {
+            const choice = choices.theme.find(value => value === e.target.value);
+            if (choice) update('theme', choice);
+          }}>{choices.theme.map(value => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}</select>
+        </label>
         {activeRole && <span className="cf-header__env mono">{activeRole}</span>}
         <StatusBadge
           label={`API: ${apiStatusLabel}`}

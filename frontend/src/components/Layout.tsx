@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -56,6 +56,13 @@ function resolvePageTitle(pathname: string): string {
 
 export function Layout({ healthState }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const menuTrigger = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    if (!sidebarOpen && menuTrigger.current) {
+      menuTrigger.current.focus();
+      menuTrigger.current = null;
+    }
+  }, [sidebarOpen]);
   const location = useLocation();
   const {
     user,
@@ -66,6 +73,13 @@ export function Layout({ healthState }: LayoutProps) {
     logout,
     isLoggingOut,
   } = useAuth();
+
+  useEffect(() => {
+    const mobile = window.matchMedia?.('(max-width: 960px)');
+    const resize = () => { if (!mobile?.matches) setSidebarOpen(false); };
+    mobile?.addEventListener('change', resize);
+    return () => mobile?.removeEventListener('change', resize);
+  }, []);
 
   const pageTitle = resolvePageTitle(location.pathname);
   const apiStatus = deriveHeaderStatus(healthState);
@@ -81,10 +95,13 @@ export function Layout({ healthState }: LayoutProps) {
         activeWorkspace={activeWorkspace}
         onSelectWorkspace={setActiveWorkspaceId}
       />
-      <div className="cf-shell__main">
+      <div className="cf-shell__main" inert={sidebarOpen}>
         <Header
           pageTitle={pageTitle}
-          onMenuToggle={() => setSidebarOpen((open) => !open)}
+          onMenuToggle={trigger => {
+            menuTrigger.current = trigger;
+            setSidebarOpen(true);
+          }}
           apiStatusLabel={apiStatus.label}
           apiStatusTone={apiStatus.tone}
           isRefreshing={healthState.isRefreshing}
@@ -98,7 +115,7 @@ export function Layout({ healthState }: LayoutProps) {
             void logout();
           }}
         />
-        <main className="cf-shell__content">
+        <main className="cf-shell__content" data-page={location.pathname.split('/')[1] || 'dashboard'}>
           <Outlet />
         </main>
       </div>

@@ -8,12 +8,15 @@
       content="CloudForge — Self-Service Cloud Deployment and DevOps Automation Platform"
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <script>
+      // Apply the stored palette before the first stylesheet paints.
+      let appearance;
+      try { appearance = JSON.parse(localStorage.getItem('cloudforge.appearance.v1')); } catch {}
+      const scheme = appearance?.theme;
+      document.documentElement.dataset.theme = scheme === 'dark' || scheme === 'light'
+        ? scheme : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.accent = appearance?.accent || 'blue';
+    </script>
     <title>CloudForge — Cloud Deployment &amp; DevOps Platform</title>
   </head>
   <body>

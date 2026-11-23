@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { ForgeStack } from '../components/ForgeStack';
+import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -32,6 +33,15 @@ export function LoginPage({ healthState }: LoginPageProps) {
   const { status, authConfig } = useAuth();
   const [searchParams] = useSearchParams();
 
+  const [intro] = useState(() => {
+    try { return !sessionStorage.getItem('cloudforge.introduced'); } catch { return false; }
+  });
+  useEffect(() => {
+    if (intro) {
+      try { sessionStorage.setItem('cloudforge.introduced', '1'); } catch { /* Optional animation. */ }
+    }
+  }, [intro]);
+
   const errorCode = searchParams.get('error');
   const errorText = useMemo(() => {
     if (!errorCode) {
@@ -51,6 +61,12 @@ export function LoginPage({ healthState }: LoginPageProps) {
 
   return (
     <div className="cf-login">
+      <div className="cf-login__frame">
+      <div className="cf-login__visual" data-intro={intro}>
+        <span className="cf-probe__label"><Cloud size={17} /> CloudForge</span>
+        <ForgeStack />
+        <div><h2>Your cloud<br />control plane.</h2><p>Projects, environments and GitHub connections in one workspace.</p></div>
+      </div>
       <div className="cf-login__card">
         <div className="cf-login__brand">
           <div className="cf-login__logo" aria-hidden="true">
@@ -69,8 +85,7 @@ export function LoginPage({ healthState }: LoginPageProps) {
         <div className="cf-login__intro">
           <h2>Sign in to your developer workspace</h2>
           <p>
-            Authenticate with GitHub OAuth to manage workspaces, projects, persistent
-            environments, and authorized GitHub App repository connections.
+            Use your GitHub account to access your team’s projects and environments.
           </p>
         </div>
 
@@ -164,6 +179,7 @@ export function LoginPage({ healthState }: LoginPageProps) {
             size="sm"
           />
         </div>
+      </div>
       </div>
     </div>
   );

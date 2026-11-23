@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { PreferenceProvider } from './context/Preferences';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AuthProvider } from './context/AuthContext';
@@ -17,6 +18,7 @@ export function AppRoutes() {
   const healthState = useBackendHealth();
 
   return (
+    <PreferenceProvider>
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage healthState={healthState} />} />
@@ -41,6 +43,7 @@ export function AppRoutes() {
         </Route>
       </Routes>
     </AuthProvider>
+    </PreferenceProvider>
   );
 }
 

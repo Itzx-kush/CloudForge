@@ -1,3 +1,6 @@
+import { ValidatedForm } from '../components/ValidatedForm';
+import { SearchField } from '../components/SearchField';
+import { Toast } from '../components/Toast';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -413,17 +416,7 @@ export function RepositoriesPage() {
         </div>
       )}
 
-      {actionNotice && (
-        <div className="cf-notice cf-notice--success" role="status">
-          <div className="cf-notice__icon" aria-hidden="true">
-            <CheckCircle2 size={18} />
-          </div>
-          <div>
-            <p className="cf-notice__title">Updated</p>
-            <p className="cf-notice__text">{actionNotice}</p>
-          </div>
-        </div>
-      )}
+      {actionNotice && <Toast message={actionNotice} onDismiss={() => setActionNotice(null)} />}
 
       {errorMessage && (
         <ErrorState
@@ -562,17 +555,8 @@ export function RepositoriesPage() {
         }
       >
         <div className="cf-toolbar">
-          <input
-            type="search"
-            className="cf-search-input"
-            placeholder="Search repositories by owner/name or description..."
-            value={search}
-            onChange={(e) => {
-              setPage(0);
-              setSearch(e.target.value);
-            }}
-            aria-label="Search repositories"
-          />
+          <SearchField label="Search repositories" placeholder="Search repositories by owner/name or description..." value={search}
+            onChange={value => { setPage(0); setSearch(value); }} />
           <div className="cf-filter-group">
             <select
               className="cf-filter-select"
@@ -725,7 +709,7 @@ export function RepositoriesPage() {
         }
         onClose={() => setLinkingRepo(null)}
       >
-        <form className="cf-form" onSubmit={(e) => void handleLinkSubmit(e)}>
+        <ValidatedForm className="cf-form" onSubmit={(e) => void handleLinkSubmit(e)}>
           {linkError && (
             <div className="cf-notice cf-notice--error" role="alert">
               <div className="cf-notice__icon" aria-hidden="true">
@@ -806,7 +790,7 @@ export function RepositoriesPage() {
               {isLinking ? 'Linking...' : 'Confirm Link'}
             </button>
           </div>
-        </form>
+        </ValidatedForm>
       </Modal>
     </PageContainer>
   );
