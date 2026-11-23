@@ -33,7 +33,7 @@ export function DeploymentsPage() {
     <PageContainer
       title="Deployments"
       description="Container release orchestration, deployment revision ledger, and controlled rollback workflows."
-      phaseBadge={{ label: 'Phase 1 UI Foundation · Phase 3 Execution', tone: 'planned' }}
+      phaseBadge={{ label: 'Future Capability · Phase 3 Execution', tone: 'planned' }}
       actions={
         <button
           type="button"

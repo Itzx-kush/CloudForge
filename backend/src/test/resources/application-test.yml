@@ -1,12 +1,15 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:cloudforge_test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    url: jdbc:h2:mem:cloudforge_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: validate
     properties:
       hibernate:
         boot:
@@ -14,3 +17,19 @@ spring:
       jakarta:
         persistence:
           database-product-name: H2
+
+cloudforge:
+  auth:
+    frontend-base-url: http://localhost:5173
+    allowed-redirect-origins:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+    github-oauth:
+      client-id: test-github-oauth-client-id
+      client-secret: test-github-oauth-client-secret
+  github-app:
+    app-id: "999999"
+    slug: cloudforge-test-app
+    webhook-secret: test-webhook-secret-for-unit-tests
+    api-base-url: https://api.github.com
+    installation-callback-url: http://localhost:5173/api/github/app/callback

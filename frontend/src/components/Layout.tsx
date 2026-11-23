@@ -4,6 +4,7 @@ import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import type { BadgeTone } from './StatusBadge';
 import type { BackendHealthState } from '../hooks/useBackendHealth';
+import { useAuth } from '../context/AuthContext';
 import './Layout.css';
 
 const PAGE_TITLES: Record<string, string> = {
@@ -43,10 +44,30 @@ function deriveHeaderStatus(healthState: BackendHealthState): {
   return { label: 'Degraded', tone: 'degraded' };
 }
 
+function resolvePageTitle(pathname: string): string {
+  if (PAGE_TITLES[pathname]) {
+    return PAGE_TITLES[pathname];
+  }
+  if (pathname.startsWith('/projects/')) {
+    return 'Project Detail';
+  }
+  return 'Dashboard';
+}
+
 export function Layout({ healthState }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
-  const pageTitle = PAGE_TITLES[location.pathname] ?? 'Dashboard';
+  const {
+    user,
+    workspaces,
+    activeWorkspace,
+    activeRole,
+    setActiveWorkspaceId,
+    logout,
+    isLoggingOut,
+  } = useAuth();
+
+  const pageTitle = resolvePageTitle(location.pathname);
   const apiStatus = deriveHeaderStatus(healthState);
 
   return (
@@ -56,6 +77,9 @@ export function Layout({ healthState }: LayoutProps) {
         onClose={() => setSidebarOpen(false)}
         apiStatusLabel={apiStatus.label}
         apiStatusTone={apiStatus.tone}
+        workspaces={workspaces}
+        activeWorkspace={activeWorkspace}
+        onSelectWorkspace={setActiveWorkspaceId}
       />
       <div className="cf-shell__main">
         <Header
@@ -66,6 +90,12 @@ export function Layout({ healthState }: LayoutProps) {
           isRefreshing={healthState.isRefreshing}
           onRefresh={() => {
             void healthState.refresh();
+          }}
+          user={user}
+          activeRole={activeRole}
+          isLoggingOut={isLoggingOut}
+          onLogout={() => {
+            void logout();
           }}
         />
         <main className="cf-shell__content">

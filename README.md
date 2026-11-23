@@ -2,340 +2,144 @@
 
 **Self-Service Cloud Deployment and DevOps Automation Platform**
 
-> **Current Milestone:** Phase 1 — Platform Foundation (**Implemented**).
-> Advanced workflows (GitHub OAuth/Apps, container builds, Kubernetes rollouts, rollback, Prometheus/Grafana monitoring, and DevSecOps gates) are **Planned** for Phases 2–4 and clearly marked throughout the platform and documentation.
+> **Current Milestone:** Phase 2 — Identity, GitHub Integration & Persistent Workspaces (**Implemented**).
+> Container builds, encrypted secret stores, Kubernetes rollouts, rollback, Prometheus/Grafana monitoring, and DevSecOps gates remain **Planned** for Phases 3–4 and are clearly marked throughout the platform and documentation.
 
 ---
 
 ## 1. Project Overview
 
-CloudForge is a cloud-native self-service deployment and DevOps automation platform designed to give engineering teams a unified, secure control plane for managing projects, connecting repositories, automating builds, deploying containerized workloads to Kubernetes, and observing system health.
+CloudForge is a cloud-native self-service deployment and DevOps automation platform giving engineering teams a unified, secure control plane for managing workspaces, connecting GitHub repositories, configuring application environments, and (in Phases 3–4) running isolated builds and Kubernetes deployments.
 
-**Phase 1** establishes the verified full-stack foundation:
-- A dark-themed **React + TypeScript + Vite** developer console with seven core navigation views and live backend health telemetry.
-- A **Java 17 Spring Boot** REST API backed by a real JDBC connectivity probe (`GET /api/health`) and Spring Boot Actuator.
-- A **PostgreSQL 17** database running in **Docker Compose** with persistent named storage, health checks, and localhost-only exposure.
-- Multi-stage **Docker** containerization, structured request-correlated logging, automated frontend and backend tests, and comprehensive architecture documentation.
+**Phase 1 (Implemented)** established the full-stack foundation (React 19 + TypeScript + Vite console, Java 17 Spring Boot API, real `GET /api/health` PostgreSQL 17 JDBC probe, Docker Compose, structured logging, CI).
 
----
-
-## 2. Problem Statement
-
-Modern software teams frequently piece together fragmented scripts, ad-hoc CI/CD jobs, manual Kubernetes manifests, and scattered dashboards just to deploy routine services. Without a standardized self-service control plane:
-- Onboarding a new service requires repeating brittle infrastructure boilerplate.
-- Security practices (non-root containers, least-privilege credentials, secret hygiene, vulnerability scanning) are inconsistently enforced.
-- Visibility across repository commits, pipeline runs, release history, rollbacks, and runtime health is fragmented across disconnected tools.
+**Phase 2 (Implemented)** transforms CloudForge into a secure, database-backed multi-workspace platform:
+- **GitHub OAuth 2.0 Authentication:** Spring Security authorization-code login (`read:user`, `user:email`), HTTP-only server-side sessions (`CLOUDFORGE_SESSION`), SPA CSRF protection (`X-XSRF-TOKEN`), open-redirect protection, `GET /api/auth/me`, and `POST /api/auth/logout`.
+- **Flyway-Managed PostgreSQL 17 Schema:** Versioned SQL migrations (`V1`, `V2`) managing `users`, `workspaces`, `workspace_members`, `github_installations`, `linked_repositories`, `projects`, `project_environments`, `audit_events`, and `webhook_deliveries`.
+- **Workspace Role-Based Authorization (RBAC):** Backend-enforced `OWNER`, `DEVELOPER`, and `VIEWER` roles with strict cross-workspace isolation and audit trails.
+- **Dedicated GitHub App Integration:** RS256 App JWT signing, short-lived in-memory installation tokens (`metadata: read`), state-bound installation callback & ownership validation, repository discovery/sync, and revoked/suspended/rate-limit handling.
+- **Verified GitHub Webhooks:** Constant-time HMAC-SHA256 verification (`X-Hub-Signature-256`) over raw request bytes with database-backed delivery deduplication for installation and repository lifecycle events.
+- **Projects & Persistent Environments:** Full PostgreSQL CRUD for projects, repository linking, and `Development`/`Staging`/`Production` non-secret configurations (actively rejecting plaintext secrets).
+- **Complete Dark-Themed React UI:** Login screen, protected routes, workspace switcher, authenticated user profile & logout, real PostgreSQL dashboard counters, Projects CRUD & Environment editor, Repositories management, and Settings (Members, RBAC, Audit History).
 
 ---
 
-## 3. Project Objectives
+## 2. Technology Stack
 
-- **Implemented (Phase 1):**
-  - Deliver a clean, modular monorepo architecture (`frontend/`, `backend/`, `infrastructure/`, `docs/`, `.github/workflows/`).
-  - Provide a responsive dark-themed developer dashboard displaying real-time Spring Boot and PostgreSQL connectivity.
-  - Implement a Java 17 Spring Boot backend exposing `GET /api/health` backed by a real JDBC `SELECT 1` probe with proper `200 OK` / `503 Service Unavailable` semantics.
-  - Run PostgreSQL 17 and the Spring Boot backend locally through Docker Compose with named volumes, health checks, and environment-variable configuration.
-  - Establish automated frontend and backend test suites and strict secret-hygiene defaults.
-- **Planned (Phases 2–4):**
-  - Integrate GitHub OAuth and GitHub Apps for least-privilege repository linking and workspace RBAC.
-  - Persist projects, environments, and release metadata in PostgreSQL with versioned database migrations.
-  - Execute builds inside isolated, resource-limited workers and deploy container images to controlled Kubernetes clusters with full deployment history and instant rollback.
-  - Integrate Prometheus, Grafana, and automated DevSecOps gates (secret scanning, dependency audits, container CVE scanning, SBOMs).
-
----
-
-## 4. Technology Stack
-
-| Layer | Technology (Phase 1 — Implemented) | Planned Extensions (Phases 2–4) |
+| Layer | Implemented (Phases 1–2) | Planned (Phases 3–4) |
 | --- | --- | --- |
-| **Frontend** | React 19, TypeScript, Vite, React Router, Lucide Icons, Modern CSS | Real-time build log streaming, interactive rollout/rollback controls |
-| **Backend** | Java 17, Spring Boot 3.4, Maven 3.9, Spring Web, Spring Data JPA, Spring Validation, Spring Boot Actuator | Flyway migrations, Spring Security (GitHub OAuth), Kubernetes Java Client |
-| **Database** | PostgreSQL 17 (`postgres:17-alpine`) via Docker Compose | Versioned domain schemas (`projects`, `repositories`, `deployments`, `audit_logs`) |
+| **Frontend** | React 19, TypeScript, Vite, React Router 7, Lucide Icons, Obsidian Dark Design System | Real-time build log streaming, interactive rollout/rollback controls |
+| **Backend** | Java 17, Spring Boot 3.4, Maven 3.9, Spring Security 6, OAuth2 Client, Spring Data JPA, Flyway 10, BouncyCastle, Nimbus JOSE+JWT, Spring Boot Actuator | Kubernetes Java Client, Encrypted Secrets KMS integration |
+| **Database** | PostgreSQL 17 (`postgres:17-alpine`) via Docker Compose + Flyway versioned migrations | Deployment revision ledger, build job tables |
 | **Containers & Orchestration** | Multi-stage Dockerfiles, Docker Compose (WSL 2 compatible) | Rootless isolated build workers, Kubernetes manifests & Helm charts |
-| **CI/CD & DevSecOps** | GitHub Actions Phase 1 CI (`.github/workflows/ci.yml`) | Tenant pipeline orchestration, Trivy, Syft SBOM, Cosign signing |
-| **Observability** | `GET /api/health`, Actuator (`/actuator/health`, `/actuator/info`), MDC structured logs | Prometheus metrics scraping, Grafana dashboards, Alertmanager |
-| **Testing** | JUnit 5, Spring Boot Test, MockMvc, H2 (test scope), Vitest, React Testing Library | Testcontainers (PostgreSQL), end-to-end smoke tests |
+| **CI/CD & DevSecOps** | GitHub Actions CI (`.github/workflows/ci.yml`), HMAC-SHA256 webhooks | Tenant pipeline orchestration, Trivy, Syft SBOM, Cosign signing |
+| **Observability** | `GET /api/health`, Actuator (`/actuator/health`, `/actuator/info`), MDC request IDs, Workspace Audit Logs | Prometheus scraping, Grafana dashboards, Alertmanager |
+| **Testing** | JUnit 5, Spring Boot Test, MockMvc, Spring Security Test, H2 (PG mode), Vitest, React Testing Library | Live cluster & end-to-end deployment smoke tests |
 
 ---
 
-## 5. Architecture Overview
-
-```text
-+-------------------------------------------------------------------+
-|  Browser (Developer Console — React + TypeScript + Vite :5173)    |
-|  - Dashboard, Projects, Repositories, Deployments, Pipelines,     |
-|    Monitoring, Settings                                           |
-|  - Vite dev proxy forwards /api/* -> http://localhost:8080        |
-+---------------------------------+---------------------------------+
-                                  | HTTP (GET /api/health)
-                                  v
-+-------------------------------------------------------------------+
-|  Docker Compose Network (cloudforge-net)                          |
-|                                                                   |
-|  +-------------------------------------------------------------+  |
-|  |  Spring Boot Backend (Java 17, port 127.0.0.1:8080 -> 8080) |  |
-|  |  - RequestCorrelationFilter (X-Request-Id / SLF4J MDC)      |  |
-|  |  - HealthController -> HealthService -> DatabaseProbeRepo   |  |
-|  |  - Spring Boot Actuator (/actuator/health, /actuator/info)  |  |
-|  +------------------------------+------------------------------+  |
-|                                 | JDBC (postgres:5432, SELECT 1)  |
-|                                 v                                 |
-|  +-------------------------------------------------------------+  |
-|  |  PostgreSQL 17 (postgres:17-alpine, 127.0.0.1:5432 -> 5432) |  |
-|  |  - Persistent volume: cloudforge_postgres_data              |  |
-|  |  - Healthcheck: pg_isready                                  |  |
-|  +-------------------------------------------------------------+  |
-+-------------------------------------------------------------------+
-```
-
-For deeper architectural details, package boundaries, and future-phase blueprints, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
----
-
-## 6. Repository Structure
+## 3. Repository Structure
 
 ```text
 CloudForge/
-├── frontend/                   # React + TypeScript + Vite developer dashboard
-│   ├── public/                 # Static assets (favicon)
+├── frontend/                   # React 19 + TypeScript + Vite developer console
 │   ├── src/
-│   │   ├── components/         # Sidebar, Header, StatusBadge, DashboardCard, PageContainer, LoadingState, ErrorState, DataTable, Layout
-│   │   ├── hooks/              # Live health polling/probe hook
-│   │   ├── pages/              # Dashboard, Projects, Repositories, Deployments, Pipelines, Monitoring, Settings
-│   │   ├── services/           # API client calling /api/health
-│   │   ├── styles/             # Design tokens & global dark theme styles
+│   │   ├── components/         # Layout, Sidebar, Header, ProtectedRoute, Modal, DashboardCard, DataTable, StatusBadge, etc.
+│   │   ├── context/            # AuthContext (session, workspaces, role, logout)
+│   │   ├── hooks/              # Live backend health probe hook
+│   │   ├── pages/              # Login, Dashboard, Projects, ProjectDetail, Repositories, Settings, Deployments, Pipelines, Monitoring
+│   │   ├── services/           # CSRF-aware API client (auth, workspaces, projects, repos, audit, health)
+│   │   ├── styles/             # Obsidian dark design tokens & global styles
 │   │   ├── test/               # Vitest + React Testing Library suite
 │   │   └── types/              # Shared TypeScript interfaces
-│   ├── package.json
-│   └── vite.config.ts          # Dev server & /api proxy to Spring Boot
+│   └── vite.config.ts          # Dev server & same-origin proxy (/api, /oauth2, /login/oauth2, /actuator)
 ├── backend/                    # Java 17 Maven Spring Boot API
 │   ├── src/main/java/com/cloudforge/backend/
-│   │   ├── config/             # AppProperties, WebConfig (CORS), RequestCorrelationFilter
-│   │   ├── controller/         # HealthController (GET /api/health)
-│   │   ├── dto/                # HealthResponse, DatabaseHealthDto, ApiErrorResponse
-│   │   ├── entity/             # BaseAuditableEntity (Phase 2+ JPA foundation)
-│   │   ├── exception/          # GlobalExceptionHandler
-│   │   ├── repository/         # DatabaseProbeRepository (real JDBC SELECT 1 check)
-│   │   └── service/            # HealthService
-│   ├── src/main/resources/     # application.yml, logback-spring.xml
-│   ├── src/test/               # JUnit 5, MockMvc, and SpringBootTest suite
-│   ├── Dockerfile              # Multi-stage Maven build + non-root Temurin 17 runtime
-│   └── pom.xml
-├── infrastructure/
-│   ├── docker/                 # Future shared container templates (Phase 1 README)
-│   ├── kubernetes/             # Planned Kubernetes manifests & RBAC (Phase 3+)
-│   └── monitoring/             # Planned Prometheus & Grafana configs (Phase 4)
+│   │   ├── config/             # AppProperties, WebConfig, RequestCorrelationFilter
+│   │   ├── controller/         # Health, Auth, Workspace, Project, GitHubIntegration, GitHubWebhook, AuditEvent
+│   │   ├── dto/                # Validated Java 17 request/response records
+│   │   ├── entity/             # BaseAuditableEntity + 9 Phase 2 JPA entities & enums
+│   │   ├── exception/          # GlobalExceptionHandler & typed API exceptions
+│   │   ├── github/             # GitHubAppTokenService, GitHubApiClient, RestClientGitHubApiClient, WebhookSignatureVerifier
+│   │   ├── repository/         # DatabaseProbeRepository + 9 Spring Data JPA repositories
+│   │   ├── security/           # SecurityConfig, OAuth2 user service & handlers, SPA CSRF, RedirectOriginValidator
+│   │   └── service/            # Health, UserAccount, WorkspaceAuthorization, Workspace, Project, Environment, GitHub, Webhook, Audit
+│   ├── src/main/resources/
+│   │   ├── db/migration/       # Flyway SQL migrations (V1__phase2_core_schema.sql, V2__webhook_deliveries.sql)
+│   │   ├── application.yml
+│   │   └── logback-spring.xml
+│   ├── src/test/               # JUnit 5 unit, Flyway migration, security, RBAC, GitHub App & webhook tests
+│   └── Dockerfile              # Multi-stage Maven build + non-root Temurin 17 runtime
 ├── docs/
-│   ├── ARCHITECTURE.md         # System design, data flows, and planned component architecture
-│   ├── DEVELOPMENT.md          # Local development, debugging, and troubleshooting guide
-│   └── ROADMAP.md              # Phased roadmap distinguishing implemented vs. planned work
-├── .github/
-│   └── workflows/
-│       └── ci.yml              # Automated Phase 1 CI workflow (backend tests + frontend build/tests)
-├── compose.yaml                # PostgreSQL 17 + Spring Boot backend orchestration
-├── .env.example                # Safe local development environment variable template
-├── .gitignore                  # Comprehensive exclusions (Java, Maven, Node, IDEs, .env, logs)
-├── LICENSE                     # MIT License
-└── README.md
+│   ├── ARCHITECTURE.md         # Implemented Phases 1–2 & planned Phases 3–4 architecture
+│   ├── DEVELOPMENT.md          # Local development, migrations, testing & troubleshooting
+│   ├── GITHUB_INTEGRATION.md   # Complete GitHub OAuth App, GitHub App & Webhook setup guide
+│   └── ROADMAP.md              # Implemented vs. planned milestone tracker
+├── compose.yaml                # PostgreSQL 17 (persistent volume) + Spring Boot backend
+└── .env.example                # Local development & GitHub integration variable template
 ```
 
 ---
 
-## 7. Prerequisites
+## 4. Quick Start
 
-- **Java JDK 17** (e.g., Eclipse Temurin 17)
-- **Apache Maven 3.9+**
-- **Node.js 24+** and **npm 11+** (Node 20+ compatible)
-- **Docker Desktop** with **Docker Compose v2+** (WSL 2 backend on Windows 11)
-- **Git**
-
----
-
-## 8. Installation Instructions
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/Itzx-kush/CloudForge.git
-   cd CloudForge
-   ```
-
-2. **Create your local environment file (never committed to Git):**
-   ```bash
-   # PowerShell (Windows)
+1. **Create your local environment file (ignored by Git):**
+   ```powershell
    Copy-Item .env.example .env
-
-   # Bash / WSL / macOS / Linux
-   cp .env.example .env
    ```
-
-3. **Install frontend dependencies:**
-   ```bash
-   cd frontend
-   npm install
-   cd ..
-   ```
-
----
-
-## 9. Local Development Commands
-
-### Option A — Recommended: Backend + PostgreSQL in Docker Compose, Frontend via Vite
-
-1. **Start PostgreSQL 17 and the Spring Boot backend:**
-   ```bash
+2. **Optional — Add GitHub OAuth & GitHub App credentials:**
+   See [`docs/GITHUB_INTEGRATION.md`](docs/GITHUB_INTEGRATION.md) for exact callback URLs, permissions, and environment variables.
+3. **Start PostgreSQL 17 and the Spring Boot backend (applies Flyway migrations automatically):**
+   ```powershell
    docker compose up -d --build
    ```
-
-2. **Start the React development server (with `/api` proxy to `http://localhost:8080`):**
-   ```bash
+4. **Start the React frontend:**
+   ```powershell
    cd frontend
+   npm install
    npm run dev
    ```
-
-3. Open **http://localhost:5173** in your browser. The Dashboard and Monitoring views immediately display live connectivity to the Spring Boot API and PostgreSQL 17.
-
-### Option B — Run Spring Boot directly on the host with Maven (PostgreSQL in Docker)
-
-1. **Start only PostgreSQL 17:**
-   ```bash
-   docker compose up -d postgres
-   ```
-
-2. **Run Spring Boot locally with Maven:**
-   ```bash
-   cd backend
-   mvn spring-boot:run
-   ```
-
-3. **Start the React frontend:**
-   ```bash
-   cd frontend
-   npm run dev
-   ```
+5. Open **http://localhost:5173**.
 
 ---
 
-## 10. Docker Compose Commands
+## 5. Key Backend APIs (Phase 1 & Phase 2)
 
-```bash
-# Build backend image and start PostgreSQL 17 + Spring Boot in the background
-docker compose up -d --build
-
-# Check container status and health checks
-docker compose ps
-
-# Tail backend and database logs
-docker compose logs -f backend postgres
-
-# Stop containers while preserving the PostgreSQL named volume
-docker compose down
-
-# Stop containers AND delete the persistent PostgreSQL volume (fresh reset)
-docker compose down -v
-```
+| Category | Endpoints | Authorization |
+| --- | --- | --- |
+| **Health & Ops** | `GET /api/health`, `GET /actuator/health`, `GET /actuator/info` | Public |
+| **Authentication** | `GET /api/auth/config`, `GET /api/auth/csrf`, `GET /api/auth/me`, `POST /api/auth/logout`, `/oauth2/authorization/github` | Config/CSRF public; Me/Logout authenticated |
+| **Workspaces & RBAC** | `GET/POST /api/workspaces`, `GET/PATCH /api/workspaces/{id}`, `GET/POST /api/workspaces/{id}/members`, `PATCH/DELETE /api/workspaces/{id}/members/{memberId}` | Membership + `OWNER` for mutations |
+| **Projects & Environments** | `GET/POST /api/workspaces/{id}/projects`, `GET/PUT/DELETE .../projects/{projectId}`, `GET/POST/PUT/DELETE .../projects/{projectId}/environments[/{envId}]` | `VIEWER` read, `DEVELOPER` create/update + Dev env, `OWNER` full control & delete |
+| **GitHub App & Repos** | `GET .../github/installations`, `POST .../github/install-url`, `GET /api/github/app/callback`, `POST .../installations/{instId}/sync`, `DELETE .../installations/{instId}`, `GET .../repositories[/{repoId}]` | `OWNER` for connections/sync; all members read repos |
+| **Audit Logs** | `GET /api/workspaces/{id}/audit-events` | `OWNER` only |
+| **GitHub Webhooks** | `POST /api/webhooks/github` | `X-Hub-Signature-256` HMAC-SHA256 verification |
 
 ---
 
-## 11. Backend API Documentation
+## 6. Testing
 
-### `GET /api/health`
-
-Performs a live JDBC connection check (`connection.isValid` + `SELECT 1`) against the configured PostgreSQL database and reports application and dependency health.
-
-- **Healthy Response — `200 OK`**
-  ```json
-  {
-    "application": "CloudForge Backend",
-    "version": "0.1.0-phase1",
-    "phase": "Phase 1 — Platform Foundation",
-    "status": "UP",
-    "database": {
-      "status": "UP",
-      "engine": "PostgreSQL 17.4",
-      "responseTimeMs": 4,
-      "message": "Database connection verified"
-    },
-    "timestamp": "2026-11-23T06:30:00.123456Z"
-  }
-  ```
-
-- **Degraded Response (Database Unavailable) — `503 Service Unavailable`**
-  ```json
-  {
-    "application": "CloudForge Backend",
-    "version": "0.1.0-phase1",
-    "phase": "Phase 1 — Platform Foundation",
-    "status": "DEGRADED",
-    "database": {
-      "status": "DOWN",
-      "engine": "PostgreSQL",
-      "responseTimeMs": 3001,
-      "message": "Database connectivity check failed"
-    },
-    "timestamp": "2026-11-23T06:35:00.123456Z"
-  }
-  ```
-
-- **Operational Actuator Endpoints (Phase 1):**
-  - `GET /actuator/health` — Spring Boot Actuator health check (including liveness/readiness probes).
-  - `GET /actuator/info` — Application metadata.
-
-- **Error Responses:**
-  All error responses (`400`, `404`, `405`, `500`) return a consistent JSON `ApiErrorResponse` containing `timestamp`, `status`, `error`, `message`, `path`, `requestId`, and `fieldErrors` without exposing stack traces or credentials.
-
----
-
-## 12. Testing Instructions
-
-### Backend Tests (JUnit 5, MockMvc, Spring Boot Test)
-
-```bash
+```powershell
+# Backend (JUnit 5, MockMvc, Spring Security Test, Flyway, H2)
 cd backend
-mvn test
-```
+mvn -B test
 
-### Frontend Tests, Typecheck & Production Build
-
-```bash
+# Frontend (Vitest, React Testing Library, TypeScript, Vite production build)
 cd frontend
 npm test
 npm run typecheck
 npm run build
 ```
 
-### Live Health Verification (with Docker Compose running)
-
-```bash
-# Direct backend check
-curl -i http://localhost:8080/api/health
-
-# Through Vite development proxy (while npm run dev is running)
-curl -i http://localhost:5173/api/health
-```
-
 ---
 
-## 13. Development Roadmap
+## 7. Security Considerations & Scope Boundaries
 
-| Phase | Milestone | Status | Key Deliverables |
-| --- | --- | --- | --- |
-| **Phase 1** | Platform Foundation | **Implemented** | Monorepo layout, React/TS dark console (7 views), Java 17 Spring Boot API, real PostgreSQL 17 health check, multi-stage Dockerfile, Docker Compose, tests, docs |
-| **Phase 2** | Identity, GitHub & Projects | **Planned** | GitHub OAuth & GitHub App integration, Flyway migrations, Projects & Repositories CRUD APIs, workspace RBAC |
-| **Phase 3** | Isolated Builds & Kubernetes Deployments | **Planned** | Sandboxed rootless build workers, OCI image deployments, GitHub Actions sync, Kubernetes rollout controller, deployment history & rollback |
-| **Phase 4** | Observability & DevSecOps | **Planned** | Prometheus scraping, provisioned Grafana dashboards, alerting, Trivy/SBOM/secret scanning security gates |
-
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for detailed phase deliverables and dependencies.
-
----
-
-## 14. Security Considerations
-
-- **No Arbitrary Repository Execution in Phase 1:** CloudForge does not clone, build, or execute external GitHub repository code in Phase 1. Future build automation will run strictly inside isolated, ephemeral, non-root workers with hard CPU, memory, disk, time, and network egress limits.
-- **Least-Privilege & Controlled Targets:** Future GitHub integrations will use short-lived GitHub App installation tokens and signed webhooks rather than broad personal access tokens, deploying only to explicitly registered, namespace-scoped Kubernetes service accounts.
-- **Localhost-Only Database Exposure:** `compose.yaml` binds PostgreSQL strictly to `127.0.0.1:5432` and the backend to `127.0.0.1:8080` for local development, preventing unintended LAN/public exposure.
-- **Non-Root Container Execution:** The Spring Boot runtime image runs as an unprivileged `cloudforge` user on Alpine Temurin 17 JRE.
-- **Secret Hygiene:** `.env` files and private key materials are ignored by `.gitignore`. `.env.example` contains only clearly labeled local-development placeholder values. Error responses and warning logs avoid leaking connection strings or credentials.
-- **Authentication Scope:** Authentication and GitHub OAuth are intentionally excluded from Phase 1 local foundation and will be introduced in Phase 2 prior to any multi-user or networked deployment.
+- **Server-Side Sessions & CSRF:** HTTP-only `CLOUDFORGE_SESSION` cookie + `X-XSRF-TOKEN` CSRF enforcement on authenticated state-changing requests. Zero GitHub access tokens are exposed to browser JavaScript or logs.
+- **Backend RBAC & Workspace Isolation:** Every workspace resource enforces role checks and workspace ownership on the backend; cross-workspace reads, mutations, and repository bindings are blocked.
+- **Plaintext Secrets Rejected:** Project environment configurations support non-secret values only; secret-like keys and token/PEM patterns are rejected with `400 Bad Request`. Encrypted secret storage is deferred to Phase 3.
+- **No Code Execution or Deployments in Phase 2:** Repository builds, container execution, and Kubernetes rollouts remain disabled until Phase 3 isolated workers are introduced.
+- **External Credentials:** Live GitHub OAuth sign-in, GitHub App installations, and public webhook deliveries require configuring your own GitHub OAuth App and GitHub App credentials in `.env` (documented in [`docs/GITHUB_INTEGRATION.md`](docs/GITHUB_INTEGRATION.md)).
 
 ---
 

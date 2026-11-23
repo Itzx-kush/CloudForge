@@ -1,5 +1,6 @@
-import { Menu, RefreshCw } from 'lucide-react';
+import { LogOut, Menu, RefreshCw } from 'lucide-react';
 import { StatusBadge, type BadgeTone } from './StatusBadge';
+import type { UserProfile, WorkspaceRole } from '../types/platform';
 import './Header.css';
 
 export interface HeaderProps {
@@ -9,6 +10,10 @@ export interface HeaderProps {
   apiStatusTone: BadgeTone;
   isRefreshing: boolean;
   onRefresh: () => void;
+  user: UserProfile | null;
+  activeRole: WorkspaceRole | null;
+  isLoggingOut: boolean;
+  onLogout: () => void;
 }
 
 export function Header({
@@ -18,7 +23,15 @@ export function Header({
   apiStatusTone,
   isRefreshing,
   onRefresh,
+  user,
+  activeRole,
+  isLoggingOut,
+  onLogout,
 }: HeaderProps) {
+  const initials = (user?.displayName || user?.username || 'U')
+    .slice(0, 2)
+    .toUpperCase();
+
   return (
     <header className="cf-header">
       <div className="cf-header__left">
@@ -40,7 +53,7 @@ export function Header({
       </div>
 
       <div className="cf-header__right">
-        <span className="cf-header__env mono">Phase 1 Foundation</span>
+        {activeRole && <span className="cf-header__env mono">{activeRole}</span>}
         <StatusBadge
           label={`API: ${apiStatusLabel}`}
           tone={apiStatusTone}
@@ -61,6 +74,35 @@ export function Header({
           />
           <span className="cf-header__refresh-text">Refresh</span>
         </button>
+
+        {user && (
+          <div className="cf-header__user">
+            {user.avatarUrl ? (
+              <img
+                src={user.avatarUrl}
+                alt={`@${user.username} avatar`}
+                className="cf-avatar cf-avatar--sm"
+              />
+            ) : (
+              <span className="cf-avatar-fallback cf-avatar-fallback--sm" aria-hidden="true">
+                {initials}
+              </span>
+            )}
+            <span className="cf-header__username mono">@{user.username}</span>
+            <button
+              type="button"
+              className="btn btn-sm cf-header__logout"
+              onClick={onLogout}
+              disabled={isLoggingOut}
+              aria-label="Sign out"
+            >
+              <LogOut size={13} aria-hidden="true" />
+              <span className="cf-header__logout-text">
+                {isLoggingOut ? 'Signing out...' : 'Sign out'}
+              </span>
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );

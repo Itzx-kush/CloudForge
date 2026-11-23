@@ -72,7 +72,7 @@ export function PipelinesPage() {
     <PageContainer
       title="Pipelines"
       description="CI/CD workflow orchestration combining GitHub Actions status telemetry and isolated CloudForge build runners."
-      phaseBadge={{ label: 'Phase 1 UI Foundation · Phase 3 CI/CD', tone: 'planned' }}
+      phaseBadge={{ label: 'Future Capability · Phase 3 CI/CD', tone: 'planned' }}
     >
       <div className="cf-notice cf-notice--planned">
         <div className="cf-notice__icon" aria-hidden="true">

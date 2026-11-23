@@ -8,6 +8,7 @@ import com.cloudforge.backend.service.HealthService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -22,6 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(controllers = HealthController.class)
+@AutoConfigureMockMvc(addFilters = false)
 @Import(GlobalExceptionHandler.class)
 @EnableConfigurationProperties(AppProperties.class)
 class HealthControllerTest {
@@ -36,8 +38,8 @@ class HealthControllerTest {
     void returnsOkWhenApplicationAndDatabaseAreUp() throws Exception {
         HealthResponse response = new HealthResponse(
                 "CloudForge Backend",
-                "0.1.0-phase1",
-                "Phase 1 — Platform Foundation",
+                "0.2.0-phase2",
+                "Phase 2 — Identity, GitHub Integration & Persistent Workspaces",
                 HealthService.STATUS_UP,
                 new DatabaseHealthDto("UP", "PostgreSQL 17.4", 4L, "Database connection verified"),
                 Instant.parse("2026-11-23T06:00:00Z")
@@ -49,7 +51,7 @@ class HealthControllerTest {
         mockMvc.perform(get("/api/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.application").value("CloudForge Backend"))
-                .andExpect(jsonPath("$.version").value("0.1.0-phase1"))
+                .andExpect(jsonPath("$.version").value("0.2.0-phase2"))
                 .andExpect(jsonPath("$.status").value("UP"))
                 .andExpect(jsonPath("$.database.status").value("UP"))
                 .andExpect(jsonPath("$.database.engine").value("PostgreSQL 17.4"))
@@ -61,8 +63,8 @@ class HealthControllerTest {
     void returnsServiceUnavailableWhenDatabaseIsDown() throws Exception {
         HealthResponse response = new HealthResponse(
                 "CloudForge Backend",
-                "0.1.0-phase1",
-                "Phase 1 — Platform Foundation",
+                "0.2.0-phase2",
+                "Phase 2 — Identity, GitHub Integration & Persistent Workspaces",
                 HealthService.STATUS_DEGRADED,
                 new DatabaseHealthDto("DOWN", "PostgreSQL", 3001L, "Database connectivity check failed"),
                 Instant.parse("2026-11-23T06:05:00Z")

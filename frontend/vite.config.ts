@@ -14,10 +14,22 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
         },
         '/actuator': {
           target: apiProxyTarget,
           changeOrigin: true,
+          xfwd: true,
+        },
+        '/oauth2': {
+          target: apiProxyTarget,
+          changeOrigin: true,
+          xfwd: true,
+        },
+        '/login/oauth2': {
+          target: apiProxyTarget,
+          changeOrigin: true,
+          xfwd: true,
         },
       },
     },
