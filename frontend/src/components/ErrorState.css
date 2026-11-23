@@ -1,0 +1,56 @@
+.cf-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--status-error-border);
+  background: var(--status-error-bg);
+  flex-wrap: wrap;
+}
+
+.cf-error__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: rgba(244, 63, 94, 0.18);
+  color: var(--status-error-fg);
+  flex-shrink: 0;
+}
+
+.cf-error__body {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.cf-error__title {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: #fecdd3;
+}
+
+.cf-error__message {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #fda4af;
+}
+
+.cf-error__detail {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: rgba(254, 205, 211, 0.8);
+}
+
+.cf-error__retry {
+  align-self: center;
+  border-color: var(--status-error-border);
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.cf-error__retry:hover:not(:disabled) {
+  border-color: var(--status-error-fg);
+}

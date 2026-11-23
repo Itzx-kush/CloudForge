@@ -1,0 +1,84 @@
+.cf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--status-neutral-border);
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-fg);
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.cf-badge--sm {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+
+.cf-badge--md {
+  padding: 6px 11px;
+  font-size: 12px;
+}
+
+.cf-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.cf-badge__dot--pulse {
+  box-shadow: 0 0 0 0 currentColor;
+  animation: cf-pulse 2s infinite;
+}
+
+@keyframes cf-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.cf-badge--healthy {
+  color: var(--status-healthy-fg);
+  background: var(--status-healthy-bg);
+  border-color: var(--status-healthy-border);
+}
+
+.cf-badge--degraded {
+  color: var(--status-degraded-fg);
+  background: var(--status-degraded-bg);
+  border-color: var(--status-degraded-border);
+}
+
+.cf-badge--error {
+  color: var(--status-error-fg);
+  background: var(--status-error-bg);
+  border-color: var(--status-error-border);
+}
+
+.cf-badge--info {
+  color: var(--status-info-fg);
+  background: var(--status-info-bg);
+  border-color: var(--status-info-border);
+}
+
+.cf-badge--neutral {
+  color: var(--status-neutral-fg);
+  background: var(--status-neutral-bg);
+  border-color: var(--status-neutral-border);
+}
+
+.cf-badge--planned {
+  color: var(--status-planned-fg);
+  background: var(--status-planned-bg);
+  border-color: var(--status-planned-border);
+}

@@ -1,0 +1,97 @@
+# ==============================================================================
+# CloudForge .gitignore
+# ==============================================================================
+
+# --- Environment & Secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# --- Java ---
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+
+# --- Maven ---
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# --- Node.js / npm ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.npm
+.eslintcache
+.tsbuildinfo
+
+# --- React / Vite / Build Outputs ---
+dist/
+dist-ssr/
+build/
+out/
+coverage/
+.vite/
+*.local
+
+# --- IntelliJ IDEA ---
+.idea/
+*.iws
+*.iml
+*.ipr
+atlassian-ide-plugin.xml
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+
+# --- VS Code ---
+.vscode/
+!.vscode/extensions.json
+*.code-workspace
+
+# --- Antigravity / Local Agent Workspace Artifacts ---
+.antigravity/
+.gemini/
+
+# --- Logs & Temporary Files ---
+logs/
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+.cache/
+
+# --- Operating System Files ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
