@@ -1,0 +1,9 @@
+# Render-specific values only. Local Docker Compose uses the unchanged application.yml.
+server:
+  port: ${PORT:10000}
+
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
