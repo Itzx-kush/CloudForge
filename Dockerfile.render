@@ -10,6 +10,7 @@ RUN npm run build
 FROM maven:3.9.9-eclipse-temurin-17-alpine AS backend-build
 WORKDIR /workspace
 COPY backend/pom.xml ./
+COPY infrastructure/docker/maven-settings-render.xml /root/.m2/settings.xml
 RUN mvn -B -ntp dependency:go-offline
 COPY backend/src ./src
 COPY --from=frontend-build /frontend/dist/ ./src/main/resources/static/
