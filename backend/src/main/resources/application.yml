@@ -1,0 +1,73 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
+
+spring:
+  application:
+    name: cloudforge-backend
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/cloudforge}
+    username: ${SPRING_DATASOURCE_USERNAME:cloudforge}
+    password: ${SPRING_DATASOURCE_PASSWORD:cloudforge_local_dev_password}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: cloudforge-hikari-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 3000
+      validation-timeout: 2000
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      initialization-fail-timeout: -1
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        boot:
+          allow_jdbc_metadata_access: false
+      jakarta:
+        persistence:
+          database-product-name: PostgreSQL
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: ${cloudforge.name}
+    version: ${cloudforge.version}
+    phase: ${cloudforge.phase}
+
+cloudforge:
+  name: CloudForge Backend
+  version: 0.1.0-phase1
+  phase: Phase 1 — Platform Foundation
+  database-check-timeout-seconds: 3
+  cors:
+    allowed-origins: ${CLOUDFORGE_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+
+logging:
+  level:
+    root: ${LOG_LEVEL_ROOT:INFO}
+    com.cloudforge.backend: ${LOG_LEVEL_APP:INFO}
+    org.hibernate.SQL: WARN
