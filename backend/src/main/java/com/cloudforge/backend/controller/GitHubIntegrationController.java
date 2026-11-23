@@ -85,6 +85,10 @@ public class GitHubIntegrationController {
             HttpServletResponse response
     ) throws IOException {
         if ("request".equalsIgnoreCase(setupAction)) {
+            var session = request.getSession(false);
+            if (session != null) {
+                session.removeAttribute(GitHubIntegrationService.PENDING_INSTALL_STATE_ATTR);
+            }
             response.sendRedirect(redirectOriginValidator.buildSafeFrontendUrl(
                     "/repositories?installation=pending_approval"
             ));

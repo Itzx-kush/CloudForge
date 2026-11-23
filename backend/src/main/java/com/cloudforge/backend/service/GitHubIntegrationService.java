@@ -28,6 +28,8 @@ import com.cloudforge.backend.github.GitHubRepositoryMetadata;
 import com.cloudforge.backend.repository.GitHubInstallationRepository;
 import com.cloudforge.backend.repository.LinkedRepositoryRepository;
 import jakarta.servlet.http.HttpSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -39,6 +41,7 @@ import java.io.Serial;
 import java.io.Serializable;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -52,6 +55,8 @@ import java.util.UUID;
 
 @Service
 public class GitHubIntegrationService {
+
+    private static final Logger log = LoggerFactory.getLogger(GitHubIntegrationService.class);
 
     public static final String PENDING_INSTALL_STATE_ATTR = "CLOUDFORGE_GH_APP_INSTALL_STATE";
     private static final Duration STATE_TTL = Duration.ofMinutes(15);
@@ -190,7 +195,8 @@ public class GitHubIntegrationService {
                         "githubInstallationId", saved.getGithubInstallationId(),
                         "accountLogin", saved.getAccountLogin(),
                         "accountType", saved.getAccountType(),
-                        "status", saved.getStatus().name()
+                        "status", saved.getStatus().name(),
+                        "stateParameterProvided", state != null
                 )
         );
 
@@ -433,21 +439,36 @@ public class GitHubIntegrationService {
     }
 
     private PendingInstallationState consumeAndValidateState(String state, UserEntity user, HttpSession session) {
-        if (session == null || !StringUtils.hasText(state)) {
-            throw new BadRequestException("Missing GitHub App installation state parameter");
+        if (session == null) {
+            throw new BadRequestException("Missing active session for GitHub App installation callback");
         }
         Object raw = session.getAttribute(PENDING_INSTALL_STATE_ATTR);
         // Single-use state: always clear immediately to prevent replay attacks
         session.removeAttribute(PENDING_INSTALL_STATE_ATTR);
 
         if (!(raw instanceof PendingInstallationState pending)) {
-            throw new BadRequestException("GitHub App installation session state has expired or is invalid");
+            throw new BadRequestException("No pending GitHub App installation request found for this session");
         }
-        if (pending.expiresAt().isBefore(Instant.now())) {
+        if (!pending.expiresAt().isAfter(Instant.now())) {
             throw new BadRequestException("GitHub App installation state has expired; please initiate connection again");
         }
-        if (!pending.nonce().equals(state) || !pending.userId().equals(user.getId())) {
+        if (!pending.userId().equals(user.getId())) {
             throw new ForbiddenOperationException("GitHub App installation state mismatch");
+        }
+        if (state != null) {
+            boolean matches = StringUtils.hasText(state)
+                    && MessageDigest.isEqual(
+                            pending.nonce().getBytes(StandardCharsets.UTF_8),
+                            state.getBytes(StandardCharsets.UTF_8)
+                    );
+            if (!matches) {
+                throw new ForbiddenOperationException("GitHub App installation state mismatch");
+            }
+        } else {
+            log.info(
+                    "GitHub App callback arrived without state parameter; validated unexpired session-bound pending installation for workspaceId={}",
+                    pending.workspaceId()
+            );
         }
         return pending;
     }
