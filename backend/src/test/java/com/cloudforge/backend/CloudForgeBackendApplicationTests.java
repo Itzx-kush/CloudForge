@@ -19,7 +19,7 @@ class CloudForgeBackendApplicationTests {
     private TestRestTemplate restTemplate;
 
     @Test
-    void healthEndpointReturnsUpWithLiveDatabaseCheckAndCorrelationHeader() {
+    void healthEndpointRemainsPublicAndReturnsUpWithLiveDatabaseCheckAndCorrelationHeader() {
         ResponseEntity<HealthResponse> response = restTemplate.getForEntity("/api/health", HealthResponse.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -37,21 +37,22 @@ class CloudForgeBackendApplicationTests {
     }
 
     @Test
-    void actuatorHealthEndpointIsAccessible() {
+    void actuatorHealthEndpointRemainsPublicWithoutExposingInternalDetails() {
         ResponseEntity<String> response = restTemplate.getForEntity("/actuator/health", String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).contains("\"status\":\"UP\"");
+        assertThat(response.getBody()).doesNotContain("password");
     }
 
     @Test
-    void unknownEndpointReturnsStructuredNotFoundResponse() {
+    void unauthenticatedAccessToProtectedOrUnknownApiReturnsStructuredUnauthorized() {
         ResponseEntity<String> response = restTemplate.getForEntity("/api/does-not-exist", String.class);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(response.getBody())
-                .contains("\"status\":404")
-                .contains("\"error\":\"Not Found\"")
+                .contains("\"status\":401")
+                .contains("\"error\":\"Unauthorized\"")
                 .contains("\"path\":\"/api/does-not-exist\"");
     }
 }

@@ -1,11 +1,15 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
-  Activity,
-  Clock,
+  ArrowRight,
   Database,
+  FolderKanban,
+  GitBranch,
   Layers,
   RefreshCw,
   Server,
   ShieldCheck,
+  UserCheck,
 } from 'lucide-react';
 import { DashboardCard } from '../components/DashboardCard';
 import { DataTable, type TableColumn } from '../components/DataTable';
@@ -13,7 +17,10 @@ import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { PageContainer } from '../components/PageContainer';
 import { StatusBadge, type BadgeTone } from '../components/StatusBadge';
+import { useAuth } from '../context/AuthContext';
 import type { BackendHealthState } from '../hooks/useBackendHealth';
+import { fetchProjects } from '../services/api';
+import type { ProjectSummary } from '../types/platform';
 import './Pages.css';
 
 interface PlatformCapability {
@@ -28,35 +35,27 @@ interface PlatformCapability {
 const PLATFORM_CAPABILITIES: PlatformCapability[] = [
   {
     id: 'health-api',
-    module: 'Spring Boot Backend & Health API',
+    module: 'Spring Boot Backend & Live PostgreSQL Health API',
     targetPhase: 'Phase 1',
     statusLabel: 'Implemented',
     tone: 'healthy',
-    details: 'Live GET /api/health endpoint with real JDBC PostgreSQL verification.',
+    details: 'Live GET /api/health endpoint with real JDBC PostgreSQL 17 verification.',
   },
   {
-    id: 'postgres-compose',
-    module: 'PostgreSQL 17 & Docker Compose',
-    targetPhase: 'Phase 1',
-    statusLabel: 'Implemented',
-    tone: 'healthy',
-    details: 'Persistent local volume, health checks, and localhost-only port binding.',
-  },
-  {
-    id: 'react-console',
-    module: 'React + TypeScript Web Console',
-    targetPhase: 'Phase 1',
-    statusLabel: 'Implemented',
-    tone: 'healthy',
-    details: 'Responsive dark dashboard with Vite dev proxy and 7 navigation views.',
-  },
-  {
-    id: 'auth-projects',
-    module: 'Authentication, GitHub OAuth & Projects CRUD',
+    id: 'auth-rbac',
+    module: 'GitHub OAuth 2.0 Sessions, Persistent Users & Workspace RBAC',
     targetPhase: 'Phase 2',
-    statusLabel: 'Planned',
-    tone: 'planned',
-    details: 'User auth, GitHub App repository linking, and persisted project workspaces.',
+    statusLabel: 'Implemented',
+    tone: 'healthy',
+    details: 'HTTP-only sessions, CSRF protection, Flyway migrations, OWNER/DEVELOPER/VIEWER roles, and audit logs.',
+  },
+  {
+    id: 'github-app-projects',
+    module: 'GitHub App Integration, Projects CRUD & Environments',
+    targetPhase: 'Phase 2',
+    statusLabel: 'Implemented',
+    tone: 'healthy',
+    details: 'Short-lived GitHub App tokens, HMAC-SHA256 webhooks, repository sync, projects, and non-secret environments.',
   },
   {
     id: 'build-k8s',
@@ -72,7 +71,7 @@ const PLATFORM_CAPABILITIES: PlatformCapability[] = [
     targetPhase: 'Phase 4',
     statusLabel: 'Planned',
     tone: 'planned',
-    details: 'Cluster telemetry, alerting dashboards, SBOM generation, and policy checks.',
+    details: 'Cluster telemetry, alerting dashboards, encrypted secrets KMS, SBOM generation, and policy checks.',
   },
 ];
 
@@ -124,22 +123,63 @@ export interface DashboardPageProps {
 }
 
 export function DashboardPage({ healthState }: DashboardPageProps) {
+  const { user, activeWorkspace, activeRole, authConfig, refreshSession } = useAuth();
   const { snapshot, isLoading, isRefreshing, refresh } = healthState;
   const payload = snapshot?.payload ?? null;
   const backendHealthy = payload?.status === 'UP';
   const dbHealthy = payload?.database.status === 'UP';
 
+  const [recentProjects, setRecentProjects] = useState<ProjectSummary[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!activeWorkspace) {
+      setRecentProjects([]);
+      return;
+    }
+    let cancelled = false;
+    setProjectsLoading(true);
+    fetchProjects(activeWorkspace.id, { page: 0, size: 5 })
+      .then((res) => {
+        if (!cancelled) {
+          setRecentProjects(res.items);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRecentProjects([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProjectsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace]);
+
+  const handleRefreshAll = async () => {
+    await Promise.all([refresh(), refreshSession()]);
+  };
+
   return (
     <PageContainer
       title="Platform Overview"
-      description="Live Phase 1 control-plane connectivity between the React frontend, Spring Boot API, and PostgreSQL 17 database."
-      phaseBadge={{ label: 'Phase 1 Active', tone: 'info' }}
+      description={
+        activeWorkspace
+          ? `Authenticated workspace "${activeWorkspace.name}" backed by PostgreSQL 17 and live backend telemetry.`
+          : 'Live CloudForge control-plane overview and backend connectivity.'
+      }
+      phaseBadge={{ label: 'Phase 2 Active', tone: 'info' }}
       actions={
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => {
-            void refresh();
+            void handleRefreshAll();
           }}
           disabled={isRefreshing}
         >
@@ -148,7 +188,7 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
             className={isRefreshing ? 'cf-spin' : ''}
             aria-hidden="true"
           />
-          <span>{isRefreshing ? 'Probing API...' : 'Probe Backend Health'}</span>
+          <span>{isRefreshing ? 'Refreshing...' : 'Probe Backend Health'}</span>
         </button>
       }
     >
@@ -178,7 +218,43 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
         />
       )}
 
-      <div className="cf-grid cf-grid--4" aria-label="Live connectivity metrics">
+      <div className="cf-grid cf-grid--4" aria-label="Workspace and infrastructure telemetry">
+        <div className="cf-stat-tile">
+          <div className="cf-stat-tile__top">
+            <span className="cf-stat-tile__label">Workspace Projects</span>
+            <span className="cf-stat-tile__icon" aria-hidden="true">
+              <FolderKanban size={17} />
+            </span>
+          </div>
+          <div className="cf-stat-tile__value" data-testid="dashboard-project-count">
+            {activeWorkspace ? activeWorkspace.projectCount : 0}
+          </div>
+          <div className="cf-stat-tile__meta">
+            Persisted in PostgreSQL ·{' '}
+            <Link to="/projects" className="cf-link-accent">
+              Manage
+            </Link>
+          </div>
+        </div>
+
+        <div className="cf-stat-tile">
+          <div className="cf-stat-tile__top">
+            <span className="cf-stat-tile__label">Connected Repositories</span>
+            <span className="cf-stat-tile__icon" aria-hidden="true">
+              <GitBranch size={17} />
+            </span>
+          </div>
+          <div className="cf-stat-tile__value" data-testid="dashboard-repo-count">
+            {activeWorkspace ? activeWorkspace.connectedRepositoryCount : 0}
+          </div>
+          <div className="cf-stat-tile__meta">
+            {authConfig?.githubAppConfigured ? 'GitHub App active' : 'GitHub App setup required'} ·{' '}
+            <Link to="/repositories" className="cf-link-accent">
+              Explore
+            </Link>
+          </div>
+        </div>
+
         <div className="cf-stat-tile">
           <div className="cf-stat-tile__top">
             <span className="cf-stat-tile__label">Backend API</span>
@@ -231,41 +307,42 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
               : 'Waiting for backend response'}
           </div>
         </div>
-
-        <div className="cf-stat-tile">
-          <div className="cf-stat-tile__top">
-            <span className="cf-stat-tile__label">API Round-Trip</span>
-            <span className="cf-stat-tile__icon" aria-hidden="true">
-              <Activity size={17} />
-            </span>
-          </div>
-          <div className="cf-stat-tile__value mono">
-            {snapshot?.clientLatencyMs !== null && snapshot?.clientLatencyMs !== undefined
-              ? `${snapshot.clientLatencyMs} ms`
-              : '—'}
-          </div>
-          <div className="cf-stat-tile__meta mono">
-            GET /api/health via Vite proxy
-          </div>
-        </div>
-
-        <div className="cf-stat-tile">
-          <div className="cf-stat-tile__top">
-            <span className="cf-stat-tile__label">Last Server Timestamp</span>
-            <span className="cf-stat-tile__icon" aria-hidden="true">
-              <Clock size={17} />
-            </span>
-          </div>
-          <div className="cf-stat-tile__value" style={{ fontSize: '16px' }}>
-            {formatTimestamp(payload?.timestamp ?? snapshot?.checkedAt)}
-          </div>
-          <div className="cf-stat-tile__meta mono">
-            {payload ? `Version ${payload.version}` : 'No live response yet'}
-          </div>
-        </div>
       </div>
 
       <div className="cf-grid cf-grid--2">
+        <DashboardCard
+          title="Authenticated Session & Workspace"
+          subtitle="Verified server-side GitHub OAuth session and role-based access"
+          icon={<UserCheck size={17} />}
+          headerAction={
+            activeRole ? (
+              <StatusBadge label={`Role: ${activeRole}`} tone="info" size="sm" />
+            ) : undefined
+          }
+        >
+          <dl className="cf-kv-list">
+            <div className="cf-kv-item">
+              <dt>Signed-In User</dt>
+              <dd>
+                <strong>{user?.displayName || user?.username}</strong>{' '}
+                <span className="mono cf-muted">(@{user?.username})</span>
+              </dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Active Workspace</dt>
+              <dd>{activeWorkspace?.name ?? '—'}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Workspace Members</dt>
+              <dd className="mono">{activeWorkspace?.memberCount ?? 0}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Last Login</dt>
+              <dd className="mono">{formatTimestamp(user?.lastLoginAt)}</dd>
+            </div>
+          </dl>
+        </DashboardCard>
+
         <DashboardCard
           title="Live Backend Connectivity Details"
           subtitle="Verified directly from GET /api/health — no mocked health status"
@@ -291,8 +368,8 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
               <dd className="mono">{payload?.application ?? 'Unavailable'}</dd>
             </div>
             <div className="cf-kv-item">
-              <dt>Application Status</dt>
-              <dd className="mono">{payload?.status ?? 'UNREACHABLE'}</dd>
+              <dt>Version</dt>
+              <dd className="mono">{payload?.version ?? '—'}</dd>
             </div>
             <div className="cf-kv-item">
               <dt>Database Check</dt>
@@ -312,49 +389,94 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
             </div>
           </dl>
         </DashboardCard>
+      </div>
 
-        <DashboardCard
-          title="Phase 1 Scope & Security Boundary"
-          subtitle="Transparent separation of live foundation features vs. planned automation"
-          icon={<ShieldCheck size={17} />}
-          headerAction={
-            <StatusBadge label="Demonstration Notice" tone="planned" size="sm" />
-          }
-        >
-          <div className="cf-notice cf-notice--info" style={{ marginBottom: '14px' }}>
-            <div className="cf-notice__icon" aria-hidden="true">
-              <Layers size={18} />
-            </div>
-            <div>
-              <p className="cf-notice__title">No fabricated deployment statistics</p>
-              <p className="cf-notice__text">
-                Phase 1 establishes the verified full-stack foundation (React, Spring Boot,
-                PostgreSQL 17, Docker Compose). Project records, GitHub repositories, CI
-                pipelines, and Kubernetes deployments will be backed by real infrastructure
-                starting in Phases 2 and 3.
-              </p>
-            </div>
-          </div>
+      <DashboardCard
+        title="Recent Workspace Projects"
+        subtitle="Latest projects persisted in PostgreSQL for your active workspace"
+        icon={<FolderKanban size={17} />}
+        headerAction={
+          <Link to="/projects" className="btn btn-sm">
+            <span>View all projects</span>
+            <ArrowRight size={13} aria-hidden="true" />
+          </Link>
+        }
+      >
+        {projectsLoading ? (
+          <LoadingState
+            title="Loading workspace projects"
+            description="Querying persistent project records..."
+          />
+        ) : (
+          <DataTable
+            columns={[
+              {
+                key: 'name',
+                header: 'Project',
+                render: (row) => (
+                  <Link to={`/projects/${row.id}`} className="cf-link-accent">
+                    {row.name}
+                  </Link>
+                ),
+              },
+              {
+                key: 'repo',
+                header: 'Linked Repository',
+                render: (row) =>
+                  row.linkedRepository ? (
+                    <span className="mono">{row.linkedRepository.fullName}</span>
+                  ) : (
+                    <span className="cf-muted">Not linked</span>
+                  ),
+              },
+              {
+                key: 'branch',
+                header: 'Default Branch',
+                render: (row) => <span className="mono">{row.defaultBranch}</span>,
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                render: (row) => (
+                  <StatusBadge
+                    label={row.status}
+                    tone={
+                      row.status === 'ACTIVE'
+                        ? 'healthy'
+                        : row.status === 'PAUSED'
+                          ? 'degraded'
+                          : 'neutral'
+                    }
+                    size="sm"
+                  />
+                ),
+              },
+            ]}
+            rows={recentProjects}
+            getRowKey={(row) => row.id}
+            emptyMessage="No projects created in this workspace yet. Head to Projects to create your first project."
+            caption="Recent workspace projects"
+          />
+        )}
+      </DashboardCard>
 
-          <div className="cf-notice cf-notice--warning">
-            <div className="cf-notice__icon" aria-hidden="true">
-              <ShieldCheck size={18} />
-            </div>
-            <div>
-              <p className="cf-notice__title">Repository execution is intentionally disabled</p>
-              <p className="cf-notice__text">
-                CloudForge does not execute arbitrary repository code in Phase 1. Future
-                builds will run inside isolated, resource-limited workers with least-privilege
-                credentials and controlled deployment targets.
-              </p>
-            </div>
-          </div>
-        </DashboardCard>
+      <div className="cf-notice cf-notice--warning">
+        <div className="cf-notice__icon" aria-hidden="true">
+          <ShieldCheck size={18} />
+        </div>
+        <div>
+          <p className="cf-notice__title">Phase 2 Security Boundary: Builds &amp; Deployments Remain Disabled</p>
+          <p className="cf-notice__text">
+            Phase 2 delivers real authentication, workspace RBAC, GitHub App repository discovery,
+            persistent projects, non-secret environments, and verified webhooks. Container builds,
+            secret vaults, and Kubernetes rollouts are intentionally deferred to Phases 3 and 4.
+          </p>
+        </div>
       </div>
 
       <DashboardCard
         title="Platform Implementation Matrix"
-        subtitle="Current Phase 1 deliverables and upcoming multi-phase architecture milestones"
+        subtitle="Completed Phases 1–2 capabilities alongside upcoming Phases 3–4 milestones"
         icon={<Layers size={17} />}
         headerAction={
           <StatusBadge label="Roadmap Alignment" tone="info" size="sm" />
@@ -364,7 +486,7 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
           columns={CAPABILITY_COLUMNS}
           rows={PLATFORM_CAPABILITIES}
           getRowKey={(row) => row.id}
-          caption="CloudForge Phase 1 and planned capabilities"
+          caption="CloudForge implemented and planned capabilities"
         />
       </DashboardCard>
     </PageContainer>

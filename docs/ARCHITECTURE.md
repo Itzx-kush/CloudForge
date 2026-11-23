@@ -1,77 +1,96 @@
 # CloudForge Architecture
 
-This document describes the **implemented Phase 1 architecture** alongside the **planned target architecture** for Phases 2–4. Every section explicitly distinguishes what is live today from what is planned.
+This document describes the **implemented Phase 1 & Phase 2 architecture** alongside the **planned target architecture** for Phases 3–4. Every section explicitly distinguishes what is live today from what is planned.
 
 ---
 
 ## 1. Architectural Principles
 
-1. **Clear Separation of Concerns:** The React control-plane UI, Java 17 Spring Boot API, PostgreSQL data layer, and future infrastructure controllers are decoupled via explicit HTTP/JSON and JDBC contracts.
-2. **Real Dependency Signals:** Health and readiness endpoints verify actual infrastructure dependencies (JDBC `connection.isValid` + `SELECT 1`) rather than returning hardcoded values.
-3. **Security by Construction:** No secrets in Git, localhost-only local database exposure, non-root runtime containers, and strict deferral of arbitrary repository code execution until isolated build sandboxes exist.
-4. **Local-First Reproducibility:** Every Phase 1 component starts locally on Windows 11 (WSL 2 + Docker Desktop), macOS, or Linux with zero paid third-party dependencies.
+1. **Clear Separation of Concerns:** The React control-plane UI, Java 17 Spring Boot API, PostgreSQL 17 data layer, and GitHub integration layer communicate through explicit HTTP/JSON, OAuth 2.0, GitHub App JWT, and JDBC contracts.
+2. **Identity vs. Repository Authorization Separation:** GitHub OAuth 2.0 handles user identity (`read:user`, `user:email`), whereas a dedicated GitHub App handles least-privilege repository discovery via short-lived installation tokens (`metadata: read`) and HMAC-SHA256 verified webhooks.
+3. **Defense-in-Depth & Backend-Enforced Authorization:** Every workspace-scoped API verifies server-side session authentication, CSRF tokens (for mutations), workspace membership, and RBAC roles (`OWNER`, `DEVELOPER`, `VIEWER`) on the backend — never relying on frontend visibility alone.
+4. **No Arbitrary Repository Execution or Plaintext Secrets:** Phase 2 persists non-secret environment configuration only and never executes repository code or triggers builds/deployments.
+5. **Versioned, Non-Destructive Persistence:** Flyway manages all PostgreSQL schema evolution (`ddl-auto: none` in runtime, `validate` in test profile), preserving the existing Docker volume cleanly.
 
 ---
 
-## 2. Phase 1 Implemented Architecture
+## 2. Phase 1 & Phase 2 Implemented Architecture
 
 ### 2.1 High-Level Component Diagram
 
 ```mermaid
 flowchart LR
-    User["Developer Browser"] -->|"HTTP :5173"| Vite["React + TypeScript + Vite Dev Server"]
-    Vite -->|"Vite Proxy /api/*"| Backend["Spring Boot 3.4 API (Java 17) :8080"]
-    Backend -->|"JDBC (SELECT 1) via cloudforge-net"| Postgres[("PostgreSQL 17 :5432")]
+    User["Developer Browser"] -->|"HTTP :5173 (Same-Origin Cookies + CSRF)"| Vite["React 19 + TypeScript + Vite"]
+    Vite -->|"Proxy /api, /oauth2, /login/oauth2, /actuator"| Backend["Spring Boot 3.4 API (Java 17) :8080"]
+    Backend -->|"Flyway + JPA + JDBC via cloudforge-net"| Postgres[("PostgreSQL 17 :5432")]
     Postgres --- Volume[("Named Volume: cloudforge_postgres_data")]
+    Backend <-->|"OAuth 2.0 Auth Code (read:user, user:email)"| GHOAuth["GitHub OAuth"]
+    Backend <-->|"RS256 App JWT -> Short-Lived Installation Tokens"| GHApp["GitHub App REST API"]
+    GHApp -->|"POST /api/webhooks/github (HMAC-SHA256)"| Backend
 ```
 
-### 2.2 Frontend Architecture (`frontend/`)
+### 2.2 Authentication, Session & CSRF Flow
 
-- **Framework:** React 19, TypeScript (strict mode), Vite, React Router.
-- **Design System:** Dark cloud-infrastructure theme built with CSS custom properties (`src/styles/tokens.css`, `src/styles/global.css`), responsive sidebar drawer (`Sidebar`), sticky top bar (`Header`), semantic badges (`StatusBadge`), modular cards (`DashboardCard`), tables (`DataTable`), and explicit `LoadingState` / `ErrorState` components.
-- **API Integration:**
-  - `src/services/api.ts` calls `GET /api/health` with an `AbortController` timeout and preserves HTTP `503` degraded JSON payloads instead of discarding dependency diagnostics.
-  - `vite.config.ts` proxies `/api` and `/actuator` to `VITE_API_PROXY_TARGET` (default `http://localhost:8080`).
-- **Pages:**
-  - **Live Data Pages:** `Dashboard` and `Monitoring` display actual backend application name, status, HTTP code, PostgreSQL engine/latency, request correlation ID, and server timestamp.
-  - **Phase 1 UI Foundation Pages:** `Projects`, `Repositories`, `Deployments`, `Pipelines`, and `Settings` provide the platform navigation structure and clearly labeled demonstration/blueprint states without fabricated deployment statistics.
+1. Unauthenticated visits to any protected React route redirect to `/login`.
+2. Clicking **Continue with GitHub** initiates Spring Security's standard OAuth 2.0 authorization-code flow at `/oauth2/authorization/github` with server-side `state` stored in the HTTP session (`CLOUDFORGE_SESSION`, `HttpOnly=true`, `SameSite=Lax`, configurable `Secure`).
+3. On callback (`/login/oauth2/code/github`), `CloudForgeOAuth2UserService` exchanges the code server-side, upserts the user in `users`, automatically provisions a personal workspace with `OWNER` membership on first login, records a `USER_REGISTERED` / `USER_LOGIN` audit event, and stores a token-free `CloudForgeUserPrincipal` in the server-side session.
+4. `OAuth2LoginSuccessHandler` validates redirect destinations strictly against `cloudforge.auth.allowed-redirect-origins` before redirecting back to the SPA.
+5. All mutating browser requests (`POST`, `PUT`, `PATCH`, `DELETE`) require the `X-XSRF-TOKEN` header validated against the `XSRF-TOKEN` cookie (`SpaCsrfTokenRequestHandler` + `CsrfCookieFilter`).
+6. `POST /api/auth/logout` logs `USER_LOGOUT`, invalidates the server-side `HttpSession`, clears `SecurityContext`, and expires session/CSRF cookies.
+7. `GET /api/health` and `GET /actuator/health` remain publicly accessible without exposing credentials or internal details.
 
-### 2.3 Backend Architecture (`backend/`)
+### 2.3 GitHub App & Webhook Architecture
 
-Structured under `com.cloudforge.backend`:
+- **`GitHubAppTokenService`:** Loads the RSA private key (PKCS#1 or PKCS#8 PEM via BouncyCastle), signs RS256 App JWTs (9-minute lifetime, 60-second clock-drift buffer) via Nimbus JOSE+JWT, and caches short-lived installation access tokens strictly in memory with automatic refresh/eviction.
+- **`GitHubIntegrationService`:**
+  - `POST /api/workspaces/{workspaceId}/github/install-url` (`OWNER` only) stores a single-use 32-byte CSPRNG `state` bound to `(workspaceId, userId)` in the HTTP session and returns the GitHub App install URL.
+  - `GET /api/github/app/callback` consumes the single-use `state`, verifies `OWNER` authorization and installation ownership (preventing cross-workspace and cross-user personal installation hijacking), persists `github_installations`, and synchronizes authorized repositories into `linked_repositories`.
+  - Handles revoked (`404`), suspended (`403`), and rate-limited (`429` / `X-RateLimit-Remaining: 0`) GitHub responses cleanly.
+- **`GitHubWebhookController` & `GitHubWebhookService` (`POST /api/webhooks/github`):**
+  - Reads exact raw payload bytes (`byte[]`) and verifies `X-Hub-Signature-256` with HMAC-SHA256 and `MessageDigest.isEqual` (constant-time).
+  - Deduplicates deliveries using `X-GitHub-Delivery` against the unique `webhook_deliveries.delivery_id` table.
+  - Handles `ping`, `installation`, `installation_repositories`, and `repository` lifecycle events; safely ignores unsupported events (such as `push`) with `202 Accepted` without triggering builds or deployments.
 
-| Package | Responsibility (Phase 1) |
+### 2.4 Backend Package Structure (`com.cloudforge.backend`)
+
+| Package | Responsibility |
 | --- | --- |
-| `controller` | HTTP REST endpoints (`HealthController` exposing `GET /api/health`). |
-| `service` | Business orchestration (`HealthService` mapping probe outcomes to `UP`/`DEGRADED` and `200`/`503`). |
-| `repository` | Data access (`DatabaseProbeRepository` executing real JDBC connection validation and `SELECT 1`). |
-| `entity` | JPA persistence foundation (`BaseAuditableEntity` with UUID PK and UTC timestamps ready for Phase 2 entities). |
-| `dto` | Immutable Java 17 records (`HealthResponse`, `DatabaseHealthDto`, `ApiErrorResponse`). |
-| `config` | Validated `AppProperties`, CORS policy (`WebConfig`), and `RequestCorrelationFilter` (`X-Request-Id` + SLF4J MDC). |
-| `exception` | Centralized `GlobalExceptionHandler` returning structured JSON errors without leaking stack traces or credentials. |
+| `controller` | REST APIs (`HealthController`, `AuthController`, `WorkspaceController`, `ProjectController`, `GitHubIntegrationController`, `GitHubWebhookController`, `AuditEventController`). |
+| `service` | Domain logic (`HealthService`, `UserAccountService`, `WorkspaceAuthorizationService`, `WorkspaceService`, `ProjectService`, `ProjectEnvironmentService`, `GitHubIntegrationService`, `GitHubWebhookService`, `AuditService`, `AuditQueryService`). |
+| `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`). |
+| `security` | Spring Security filter chain, OAuth 2.0 user service, success/failure handlers, `CloudForgeUserPrincipal`, `RedirectOriginValidator`, SPA CSRF handler/filter, JSON 401/403 handlers. |
+| `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 9 Phase 2 JPA entities + enums. |
+| `repository` | `DatabaseProbeRepository` + 9 Spring Data JPA repositories with workspace-scoped `JOIN FETCH` queries. |
+| `dto` | Immutable Java 17 request/response records with Bean Validation constraints. |
+| `config` | `AppProperties` (CORS, Auth, GitHub App), `WebConfig`, `RequestCorrelationFilter`. |
+| `exception` | `GlobalExceptionHandler` + typed domain/integration exceptions returning structured `ApiErrorResponse`. |
 
-### 2.4 Data & Container Architecture (`compose.yaml`, `backend/Dockerfile`)
+### 2.5 Database Schema (Flyway Migrations)
 
-- **PostgreSQL 17 (`postgres:17-alpine`):**
-  - Persists data in named Docker volume `cloudforge_postgres_data`.
-  - Runs `pg_isready` health check so the backend waits until PostgreSQL accepts connections (`depends_on: condition: service_healthy`).
-  - Bound to `127.0.0.1:5432` so it is never exposed beyond localhost.
-- **Spring Boot Container (`backend/Dockerfile`):**
-  - Multi-stage Docker build: Stage 1 compiles and packages with `maven:3.9.9-eclipse-temurin-17-alpine`; Stage 2 runs on `eclipse-temurin:17-jre-alpine` under a non-root `cloudforge` user.
-  - Connects to PostgreSQL over the internal Docker bridge network (`cloudforge-net`) using service hostname `postgres`.
-  - Configured with `hikari.initialization-fail-timeout: -1` so if PostgreSQL temporarily restarts or disconnects, the API stays alive and returns an accurate `503 Service Unavailable` response until the database recovers.
+Located under `backend/src/main/resources/db/migration/`:
+- **`V1__phase2_core_schema.sql`:** `users`, `workspaces`, `workspace_members`, `github_installations`, `linked_repositories`, `projects`, `project_environments`, `audit_events` with UUID primary keys, foreign keys, role/status check constraints, unique constraints, and query indexes.
+- **`V2__webhook_deliveries.sql`:** `webhook_deliveries` for idempotent webhook processing and SHA-256 payload fingerprinting without storing sensitive payload bodies.
+
+### 2.6 Frontend Architecture (`frontend/`)
+
+- **Framework:** React 19, TypeScript (strict mode), Vite, React Router 7.
+- **State & Auth:** `AuthContext` manages session verification (`/api/auth/me`, `/api/auth/config`), active workspace selection, role awareness, and CSRF-protected logout; `ProtectedRoute` guards authenticated views cleanly.
+- **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, structured `ApiClientError` handling, and preserved Phase 1 live `/api/health` probing.
+- **Live Phase 2 Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), `SettingsPage` (profile, workspace/member RBAC, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
+- **Future-Phase Blueprint Pages:** `DeploymentsPage` (Phase 3) and `PipelinesPage` (Phases 3–4) remain clearly labeled as planned capabilities.
 
 ---
 
-## 3. Planned Target Architecture (Phases 2–4)
+## 3. Planned Target Architecture (Phases 3–4)
 
-> **Status:** Not implemented in Phase 1. Documented here to guide incremental delivery.
+> **Status:** Deferred beyond Phase 2. Documented to guide incremental delivery.
 
 ```mermaid
 flowchart TB
     UI["React Control Plane"] --> API["Spring Boot Control Plane API"]
-    API --> PG[("PostgreSQL 17 (Projects, Repos, Releases, Audit)")]
+    API --> PG[("PostgreSQL 17 (Workspaces, Projects, Releases, Audit)")]
     API <--> GH["GitHub OAuth / GitHub App + Actions"]
+    API --> Secrets["Encrypted Secrets Vault / KMS (Phase 3)"]
     API --> Queue["Build Job Queue"]
     Queue --> Worker["Isolated Rootless Build Worker (CPU/RAM/Net Limits)"]
     Worker --> Scan["DevSecOps Gate (Trivy, SBOM, Secret Scan)"]
@@ -82,12 +101,3 @@ flowchart TB
     Prom --> K8s
     Graf["Grafana Dashboards & Alerts"] --> Prom
 ```
-
-### Planned Capabilities by Domain
-
-- **GitHub OAuth & GitHub Apps (Phase 2):** Authenticate users via GitHub OAuth and grant repository access through per-repository GitHub App installations with short-lived tokens and HMAC-verified webhooks.
-- **Domain Persistence & Flyway (Phase 2):** Versioned SQL migrations managing `users`, `projects`, `repositories`, `environments`, `deployments`, `pipeline_runs`, and `audit_events`.
-- **GitHub Actions & Isolated Build Workers (Phase 3):** Synchronize workflow runs from GitHub Actions and execute container builds inside ephemeral, unprivileged build sandboxes (e.g., rootless BuildKit/Kaniko) with strict resource quotas and egress controls.
-- **Docker Image Deployment, Kubernetes, History & Rollback (Phase 3):** Deploy immutable image digests into controlled Kubernetes namespaces (`infrastructure/kubernetes/`) with declarative readiness probes, persisted revision history, and one-click rollback to prior verified digests.
-- **Prometheus & Grafana Observability (Phase 4):** Scrape `/actuator/prometheus`, PostgreSQL metrics, and cluster telemetry into Prometheus with provisioned Grafana dashboards and alert rules (`infrastructure/monitoring/`).
-- **DevSecOps Pipeline Gates (Phase 4):** Enforce secret detection, dependency CVE checks, OCI vulnerability scanning (Trivy), SBOM generation (Syft), and Kubernetes admission policies (non-root, dropped capabilities, resource limits).

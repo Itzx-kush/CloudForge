@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   Activity,
+  Building2,
   Cloud,
   FolderKanban,
   GitBranch,
@@ -11,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { StatusBadge, type BadgeTone } from './StatusBadge';
+import type { WorkspaceSummary } from '../types/platform';
 import './Sidebar.css';
 
 export interface SidebarProps {
@@ -18,6 +20,9 @@ export interface SidebarProps {
   onClose: () => void;
   apiStatusLabel: string;
   apiStatusTone: BadgeTone;
+  workspaces: WorkspaceSummary[];
+  activeWorkspace: WorkspaceSummary | null;
+  onSelectWorkspace: (workspaceId: string) => void;
 }
 
 const NAV_ITEMS = [
@@ -35,6 +40,9 @@ export function Sidebar({
   onClose,
   apiStatusLabel,
   apiStatusTone,
+  workspaces,
+  activeWorkspace,
+  onSelectWorkspace,
 }: SidebarProps) {
   return (
     <>
@@ -69,6 +77,43 @@ export function Sidebar({
           </button>
         </div>
 
+        {activeWorkspace && (
+          <div className="cf-sidebar__workspace">
+            <div className="cf-sidebar__workspace-head">
+              <span className="cf-sidebar__workspace-label">
+                <Building2 size={12} aria-hidden="true" />
+                Workspace
+              </span>
+              <StatusBadge
+                label={activeWorkspace.role}
+                tone={
+                  activeWorkspace.role === 'OWNER'
+                    ? 'info'
+                    : activeWorkspace.role === 'DEVELOPER'
+                      ? 'healthy'
+                      : 'neutral'
+                }
+                size="sm"
+              />
+            </div>
+            <label htmlFor="cf-workspace-selector" className="sr-only">
+              Active workspace
+            </label>
+            <select
+              id="cf-workspace-selector"
+              className="cf-sidebar__workspace-select"
+              value={activeWorkspace.id}
+              onChange={(event) => onSelectWorkspace(event.target.value)}
+            >
+              {workspaces.map((ws) => (
+                <option key={ws.id} value={ws.id}>
+                  {ws.name} ({ws.role})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <nav className="cf-sidebar__nav">
           <div className="cf-sidebar__section-label">Platform</div>
           <ul className="cf-sidebar__list">
@@ -102,7 +147,7 @@ export function Sidebar({
               />
             </div>
             <p className="cf-sidebar__status-meta mono">
-              Phase 1 · Local Workspace
+              Phase 2 · Persistent Workspace
             </p>
           </div>
         </div>

@@ -18,7 +18,7 @@ export function MonitoringPage({ healthState }: MonitoringPageProps) {
   return (
     <PageContainer
       title="Monitoring"
-      description="Live Phase 1 backend health inspection and planned Phase 4 Prometheus & Grafana observability stack."
+      description="Live backend & PostgreSQL health inspection and planned Phase 4 Prometheus & Grafana observability stack."
       phaseBadge={{ label: 'Live Health Probe + Phase 4 Telemetry', tone: 'info' }}
       actions={
         <button

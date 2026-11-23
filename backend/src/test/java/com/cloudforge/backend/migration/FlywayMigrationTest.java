@@ -1,0 +1,53 @@
+package com.cloudforge.backend.migration;
+
+import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationInfo;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest
+@ActiveProfiles("test")
+class FlywayMigrationTest {
+
+    @Autowired
+    private Flyway flyway;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Test
+    void appliesAllPhase2MigrationsAndCreatesExpectedTables() {
+        MigrationInfo[] applied = flyway.info().applied();
+        assertThat(applied).hasSizeGreaterThanOrEqualTo(2);
+
+        List<String> expectedTables = List.of(
+                "users",
+                "workspaces",
+                "workspace_members",
+                "github_installations",
+                "linked_repositories",
+                "projects",
+                "project_environments",
+                "audit_events",
+                "webhook_deliveries"
+        );
+
+        for (String table : expectedTables) {
+            Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE LOWER(TABLE_SCHEMA) = 'public' AND LOWER(TABLE_NAME) = ?",
+                    Integer.class,
+                    table
+            );
+            assertThat(count)
+                    .withFailMessage("Expected table %s to exist after Flyway migrations", table)
+                    .isEqualTo(1);
+        }
+    }
+}

@@ -71,6 +71,27 @@
   font-size: 12.5px;
 }
 
+.cf-header__user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.cf-header__username {
+  font-size: 12px;
+  color: var(--text-primary);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cf-header__logout {
+  padding: 5px 9px;
+}
+
 @media (max-width: 960px) {
   .cf-header {
     padding: 0 16px;
@@ -80,7 +101,8 @@
     display: inline-flex;
   }
 
-  .cf-header__env {
+  .cf-header__env,
+  .cf-header__username {
     display: none;
   }
 }
@@ -88,7 +110,8 @@
 @media (max-width: 560px) {
   .cf-header__root,
   .cf-header__sep,
-  .cf-header__refresh-text {
+  .cf-header__refresh-text,
+  .cf-header__logout-text {
     display: none;
   }
 }

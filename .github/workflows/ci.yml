@@ -1,4 +1,4 @@
-name: CloudForge Phase 1 CI
+name: CloudForge CI
 
 on:
   push:
