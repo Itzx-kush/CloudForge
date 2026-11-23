@@ -81,6 +81,13 @@ public class SecurityConfig {
                 )
                 .requestCache(cache -> cache.requestCache(new NullRequestCache()))
                 .authorizeHttpRequests(auth -> auth
+                        // The static React shell must be publicly served so unauthenticated users can see /login.
+                        // The React ProtectedRoute only guards the UI; all APIs remain backend-authenticated.
+                        .requestMatchers(HttpMethod.GET,
+                                "/", "/index.html", "/login", "/favicon.svg", "/assets/**",
+                                "/projects", "/projects/*", "/repositories", "/deployments",
+                                "/pipelines", "/monitoring", "/settings"
+                        ).permitAll()
                         .requestMatchers("/api/health").permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/config", "/api/auth/csrf").permitAll()

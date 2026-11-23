@@ -1,0 +1,26 @@
+# CloudForge Render staging: build React and Spring Boot into one same-origin web service.
+# The existing backend/Dockerfile and local Docker Compose workflow are unchanged.
+FROM node:22-alpine AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM maven:3.9.9-eclipse-temurin-17-alpine AS backend-build
+WORKDIR /workspace
+COPY backend/pom.xml ./
+COPY infrastructure/docker/maven-settings-render.xml /root/.m2/settings.xml
+RUN mvn -B -ntp dependency:go-offline
+COPY backend/src ./src
+COPY --from=frontend-build /frontend/dist/ ./src/main/resources/static/
+RUN mvn -B -ntp clean package -DskipTests
+
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+RUN addgroup -S cloudforge && adduser -S cloudforge -G cloudforge
+COPY --from=backend-build /workspace/target/cloudforge-backend.jar /app/app.jar
+RUN chown -R cloudforge:cloudforge /app
+USER cloudforge
+EXPOSE 10000
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=65.0", "-Djava.security.egd=file:/dev/./urandom", "-jar", "/app/app.jar"]
