@@ -12,6 +12,7 @@ import com.cloudforge.backend.github.GitHubInstallationRevokedException;
 import com.cloudforge.backend.github.GitHubRepositoryMetadata;
 import com.cloudforge.backend.repository.GitHubInstallationRepository;
 import com.cloudforge.backend.repository.WorkspaceMemberRepository;
+import com.cloudforge.backend.service.GitHubIntegrationService;
 import com.cloudforge.backend.service.UserAccountService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -271,5 +272,219 @@ class GitHubAppAndRepositoriesIntegrationTest {
                         .with(authenticatedUser(owner)))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=too_many_requests"));
+    }
+
+    @Test
+    void acceptsCallbackWithoutStateWhenValidUnexpiredPendingSessionExistsAndConsumesSingleUse() throws Exception {
+        long ghInstallId = 55400L;
+        when(gitHubApiClient.getInstallation(ghInstallId)).thenReturn(
+                new GitHubInstallationDetails(
+                        ghInstallId,
+                        70001L,
+                        "gh-owner",
+                        "User",
+                        "https://avatars.githubusercontent.com/u/70001",
+                        "selected",
+                        false,
+                        null
+                )
+        );
+        when(gitHubApiClient.listAllInstallationRepositories(ghInstallId)).thenReturn(List.of(
+                new GitHubRepositoryMetadata(
+                        99401L,
+                        "gh-owner",
+                        "stateless-callback-repo",
+                        "gh-owner/stateless-callback-repo",
+                        "main",
+                        "private",
+                        "https://github.com/gh-owner/stateless-callback-repo",
+                        "Verified without state query param",
+                        false,
+                        Instant.parse("2026-11-22T12:00:00Z")
+                )
+        ));
+
+        MockHttpSession session = new MockHttpSession();
+        mockMvc.perform(post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                        .session(session)
+                        .with(authenticatedUser(owner))
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        // Callback arrives WITHOUT state query parameter (GitHub App setup/update redirect behavior)
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(session)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation=connected"));
+
+        assertThat(installationRepository.findByGithubInstallationId(ghInstallId)).isPresent();
+        assertThat(session.getAttribute(GitHubIntegrationService.PENDING_INSTALL_STATE_ATTR)).isNull();
+
+        // Single-use enforcement: second callback without state on the same session is rejected
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(session)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=bad_request"));
+    }
+
+    @Test
+    void rejectsCallbackWithMissingSessionNoPendingRequestExpiredRequestInvalidStateOrUnauthorizedUser() throws Exception {
+        long ghInstallId = 55500L;
+        when(gitHubApiClient.getInstallation(ghInstallId)).thenReturn(
+                new GitHubInstallationDetails(
+                        ghInstallId,
+                        70001L,
+                        "gh-owner",
+                        "User",
+                        null,
+                        "selected",
+                        false,
+                        null
+                )
+        );
+        when(gitHubApiClient.listAllInstallationRepositories(ghInstallId)).thenReturn(List.of());
+
+        // 1. Unauthenticated callback -> 401 Unauthorized
+        mockMvc.perform(get("/api/github/app/callback")
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install"))
+                .andExpect(status().isUnauthorized());
+
+        // 2. Missing HTTP session (no session passed -> request.getSession(false) == null)
+        mockMvc.perform(get("/api/github/app/callback")
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=bad_request"));
+
+        // 3. Active HTTP session WITHOUT a pending installation request (arbitrary callback)
+        MockHttpSession emptySession = new MockHttpSession();
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(emptySession)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=bad_request"));
+
+        // 4. Expired pending installation request (without state)
+        MockHttpSession expiredSession = new MockHttpSession();
+        expiredSession.setAttribute(
+                GitHubIntegrationService.PENDING_INSTALL_STATE_ATTR,
+                new GitHubIntegrationService.PendingInstallationState(
+                        "expired-nonce",
+                        ownerWorkspace.getId(),
+                        owner.getId(),
+                        Instant.now().minusSeconds(5)
+                )
+        );
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(expiredSession)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=bad_request"));
+        assertThat(expiredSession.getAttribute(GitHubIntegrationService.PENDING_INSTALL_STATE_ATTR)).isNull();
+
+        // 5. Invalid supplied state value is still rejected (and consumes the pending state)
+        MockHttpSession invalidStateSession = new MockHttpSession();
+        mockMvc.perform(post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                        .session(invalidStateSession)
+                        .with(authenticatedUser(owner))
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(invalidStateSession)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .param("state", "tampered-wrong-state")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+        assertThat(invalidStateSession.getAttribute(GitHubIntegrationService.PENDING_INSTALL_STATE_ATTR)).isNull();
+
+        // 6. Blank supplied state (?state=) is treated as invalid supplied state
+        MockHttpSession blankStateSession = new MockHttpSession();
+        mockMvc.perform(post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                        .session(blankStateSession)
+                        .with(authenticatedUser(owner))
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(blankStateSession)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .param("state", "   ")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+
+        // 7. Different authenticated user presenting owner's pending session (without state) -> forbidden
+        MockHttpSession otherUserSession = new MockHttpSession();
+        mockMvc.perform(post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                        .session(otherUserSession)
+                        .with(authenticatedUser(owner))
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(otherUserSession)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(developer)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+
+        // 8. Unauthorized workspace role (pending state for DEVELOPER who is not OWNER) -> forbidden
+        MockHttpSession nonOwnerRoleSession = new MockHttpSession();
+        nonOwnerRoleSession.setAttribute(
+                GitHubIntegrationService.PENDING_INSTALL_STATE_ATTR,
+                new GitHubIntegrationService.PendingInstallationState(
+                        "dev-nonce",
+                        ownerWorkspace.getId(),
+                        developer.getId(),
+                        Instant.now().plusSeconds(300)
+                )
+        );
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(nonOwnerRoleSession)
+                        .param("installation_id", String.valueOf(ghInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(developer)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+
+        // 9. Personal installation ownership is still enforced when state is omitted
+        long foreignInstallId = 55501L;
+        when(gitHubApiClient.getInstallation(foreignInstallId)).thenReturn(
+                new GitHubInstallationDetails(foreignInstallId, 70003L, "gh-other", "User", null, "selected", false, null)
+        );
+        MockHttpSession ownershipSession = new MockHttpSession();
+        mockMvc.perform(post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                        .session(ownershipSession)
+                        .with(authenticatedUser(owner))
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(ownershipSession)
+                        .param("installation_id", String.valueOf(foreignInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+
+        assertThat(installationRepository.findByGithubInstallationId(ghInstallId)).isEmpty();
+        assertThat(installationRepository.findByGithubInstallationId(foreignInstallId)).isEmpty();
     }
 }

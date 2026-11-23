@@ -2,43 +2,64 @@ package com.cloudforge.backend.repository;
 
 import com.cloudforge.backend.entity.ProjectEntity;
 import com.cloudforge.backend.entity.ProjectStatus;
+import jakarta.persistence.criteria.Fetch;
+import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface ProjectRepository extends JpaRepository<ProjectEntity, UUID> {
+public interface ProjectRepository extends JpaRepository<ProjectEntity, UUID>, JpaSpecificationExecutor<ProjectEntity> {
 
-    @Query(
-            value = """
-                    SELECT p FROM ProjectEntity p
-                    LEFT JOIN FETCH p.linkedRepository lr
-                    LEFT JOIN FETCH lr.installation
-                    WHERE p.workspace.id = :workspaceId
-                      AND (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%'))
-                           OR LOWER(p.slug) LIKE LOWER(CONCAT('%', :search, '%'))
-                           OR LOWER(COALESCE(p.description, '')) LIKE LOWER(CONCAT('%', :search, '%')))
-                      AND (:status IS NULL OR p.status = :status)
-                    """,
-            countQuery = """
-                    SELECT COUNT(p) FROM ProjectEntity p
-                    WHERE p.workspace.id = :workspaceId
-                      AND (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%'))
-                           OR LOWER(p.slug) LIKE LOWER(CONCAT('%', :search, '%'))
-                           OR LOWER(COALESCE(p.description, '')) LIKE LOWER(CONCAT('%', :search, '%')))
-                      AND (:status IS NULL OR p.status = :status)
-                    """
-    )
-    Page<ProjectEntity> searchByWorkspace(
-            @Param("workspaceId") UUID workspaceId,
-            @Param("search") String search,
-            @Param("status") ProjectStatus status,
+    /**
+     * Dynamically builds typed Criteria predicates so nullable search/status filters are omitted
+     * from SQL rather than bound as untyped nulls (preventing PostgreSQL lower(bytea) errors).
+     */
+    default Page<ProjectEntity> searchByWorkspace(
+            UUID workspaceId,
+            String search,
+            ProjectStatus status,
             Pageable pageable
-    );
+    ) {
+        return findAll((root, query, cb) -> {
+            if (query != null && query.getResultType() != Long.class && query.getResultType() != long.class) {
+                Fetch<Object, Object> repoFetch = root.fetch("linkedRepository", JoinType.LEFT);
+                repoFetch.fetch("installation", JoinType.LEFT);
+            }
+
+            List<Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("workspace").get("id"), workspaceId));
+
+            if (search != null && !search.isBlank()) {
+                String escaped = search.trim()
+                        .toLowerCase(Locale.ROOT)
+                        .replace("\\", "\\\\")
+                        .replace("%", "\\%")
+                        .replace("_", "\\_");
+                String pattern = "%" + escaped + "%";
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("name")), pattern, '\\'),
+                        cb.like(cb.lower(root.get("slug")), pattern, '\\'),
+                        cb.like(cb.lower(cb.coalesce(root.get("description"), "")), pattern, '\\')
+                ));
+            }
+
+            if (status != null) {
+                predicates.add(cb.equal(root.get("status"), status));
+            }
+
+            return cb.and(predicates.toArray(Predicate[]::new));
+        }, pageable);
+    }
 
     @Query("""
             SELECT p FROM ProjectEntity p
