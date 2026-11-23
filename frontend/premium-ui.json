@@ -1,0 +1,5 @@
+{
+  "profile": "product-admin",
+  "ownership": { "Select/Listbox": "native" },
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"]
+}

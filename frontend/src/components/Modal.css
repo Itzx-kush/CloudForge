@@ -66,5 +66,5 @@
   gap: 10px;
   padding: 14px 20px;
   border-top: 1px solid var(--border-subtle);
-  background: rgba(8, 14, 27, 0.55);
+  background: var(--bg-surface);
 }

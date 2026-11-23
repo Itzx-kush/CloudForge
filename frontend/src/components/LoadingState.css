@@ -5,7 +5,7 @@
   padding: 24px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
-  background: rgba(13, 20, 36, 0.72);
+  background: var(--bg-surface);
 }
 
 .cf-loading__spinner {

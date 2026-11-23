@@ -11,11 +11,7 @@
   max-width: 470px;
   padding: 30px;
   border-radius: var(--radius-lg);
-  background: linear-gradient(
-    180deg,
-    rgba(16, 25, 44, 0.96) 0%,
-    rgba(11, 17, 31, 0.98) 100%
-  );
+  background: var(--bg-surface);
   border: 1px solid var(--border-default);
   box-shadow: var(--shadow-glow);
   display: flex;
@@ -34,12 +30,12 @@
   height: 44px;
   border-radius: 11px;
   background: var(--accent-gradient);
-  color: #040814;
+  color: var(--on-accent);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 6px 20px rgba(56, 189, 248, 0.28);
+  box-shadow: 0 6px 20px var(--border-accent);
 }
 
 .cf-login__title {
@@ -91,7 +87,7 @@
   margin: 0;
   padding: 12px 14px;
   border-radius: var(--radius-md);
-  background: rgba(8, 14, 27, 0.72);
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
@@ -127,4 +123,17 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+.cf-login__frame { width: min(980px, 100%); display: grid; grid-template-columns: 1fr 1fr; border-radius: var(--radius-lg); border: 1px solid var(--border-default); overflow: hidden; box-shadow: var(--shadow-card); }
+.cf-login__visual { padding: clamp(24px, 4vw, 50px); display: flex; flex-direction: column; justify-content: space-between; border-right: 1px solid var(--border-subtle); }
+.cf-login__visual .forge-stack { width: 240px; height: 240px; max-width: 100%; }
+.cf-login__visual h2 { margin: 0; font-size: clamp(38px, 4.3vw, 60px); letter-spacing: -.06em; line-height: 1; }
+.cf-login__visual p { max-width: 34ch; color: var(--text-secondary); }
+.cf-login .cf-login__card { border: none; border-radius: 0; box-shadow: none; max-width: none; padding: clamp(22px, 3.5vw, 48px); }
+.cf-login__intro h2 { font-size: 24px; line-height: 1.2; letter-spacing: -.035em; }
+@media (max-width: 700px) {
+  .cf-login { padding: 14px; }
+  .cf-login__frame { display: block; max-width: 475px; }
+  .cf-login__visual { display: none; }
+  .cf-login__footer { flex-wrap: wrap; }
 }

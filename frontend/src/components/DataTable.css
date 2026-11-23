@@ -3,7 +3,7 @@
   overflow-x: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: rgba(8, 14, 27, 0.55);
+  background: var(--bg-surface);
 }
 
 .cf-table {
@@ -15,7 +15,7 @@
 
 .cf-table thead tr {
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--bg-surface);
 }
 
 .cf-table th {
@@ -40,7 +40,7 @@
 }
 
 .cf-table tbody tr:hover {
-  background: rgba(56, 189, 248, 0.04);
+  background: var(--accent-soft);
 }
 
 .cf-table__right {

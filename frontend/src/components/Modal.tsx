@@ -1,4 +1,5 @@
-import { useEffect, type ReactNode } from 'react';
+import { useOverlayFocus } from './useOverlayFocus';
+import { useId, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import './Modal.css';
 
@@ -19,18 +20,22 @@ export function Modal({
   children,
   footer,
 }: ModalProps) {
-  useEffect(() => {
-    if (!isOpen) {
-      return undefined;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  const closing = useRef(false);
+  const ref = useOverlayFocus<HTMLDivElement>(isOpen, dismiss);
+  function dismiss() {
+    if (closing.current) return;
+    const panel = ref.current;
+    const reduced = document.documentElement.dataset.motion === 'reduced' ||
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (!panel?.animate || reduced) { onClose(); return; }
+    closing.current = true;
+    const exit = panel.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(3px)' }], { duration: 100 });
+    void exit.finished.then(() => {
+      closing.current = false;
+      if (panel.isConnected) onClose();
+    }, () => { closing.current = false; });
+  }
+  const titleId = useId();
 
   if (!isOpen) {
     return null;
@@ -42,19 +47,20 @@ export function Modal({
       role="presentation"
       onClick={(event) => {
         if (event.target === event.currentTarget) {
-          onClose();
+          dismiss();
         }
       }}
     >
       <div
         className="cf-modal"
         role="dialog"
+        ref={ref}
         aria-modal="true"
-        aria-labelledby="cf-modal-title"
+        aria-labelledby={titleId}
       >
         <div className="cf-modal__header">
           <div>
-            <h2 id="cf-modal-title" className="cf-modal__title">
+            <h2 id={titleId} className="cf-modal__title">
               {title}
             </h2>
             {subtitle && <p className="cf-modal__subtitle">{subtitle}</p>}
@@ -62,7 +68,7 @@ export function Modal({
           <button
             type="button"
             className="btn-ghost cf-modal__close"
-            onClick={onClose}
+            onClick={dismiss}
             aria-label="Close dialog"
           >
             <X size={18} />

@@ -64,14 +64,14 @@ export function MonitoringPage({ healthState }: MonitoringPageProps) {
             label={
               payload
                 ? `${payload.status} · HTTP ${snapshot?.httpStatus ?? 200}`
-                : 'Unreachable'
+                : isLoading ? 'Checking' : snapshot?.networkError ? 'Unreachable' : 'Unknown'
             }
             tone={
               payload
                 ? payload.status === 'UP'
                   ? 'healthy'
                   : 'degraded'
-                : 'error'
+                : isLoading ? 'info' : snapshot?.networkError ? 'error' : 'neutral'
             }
             pulse={Boolean(payload && payload.status === 'UP')}
             size="sm"

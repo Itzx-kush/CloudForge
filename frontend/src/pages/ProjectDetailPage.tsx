@@ -1,9 +1,9 @@
+import { Toast } from '../components/Toast';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
-  CheckCircle2,
   FolderKanban,
   GitBranch,
   Plus,
@@ -359,17 +359,7 @@ export function ProjectDetailPage() {
               </div>
             )}
 
-            {envSaveSuccess && (
-              <div className="cf-notice cf-notice--success" role="status">
-                <div className="cf-notice__icon" aria-hidden="true">
-                  <CheckCircle2 size={17} />
-                </div>
-                <div>
-                  <p className="cf-notice__title">Configuration saved</p>
-                  <p className="cf-notice__text">{envSaveSuccess}</p>
-                </div>
-              </div>
-            )}
+            {envSaveSuccess && <Toast message={envSaveSuccess} onDismiss={() => setEnvSaveSuccess(null)} />}
 
             {envSaveError && (
               <div className="cf-notice cf-notice--error" role="alert">

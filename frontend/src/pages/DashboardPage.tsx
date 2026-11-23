@@ -1,3 +1,4 @@
+import { ForgeStack } from '../components/ForgeStack';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -130,9 +131,11 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
   const dbHealthy = payload?.database.status === 'UP';
 
   const [recentProjects, setRecentProjects] = useState<ProjectSummary[]>([]);
+  const [projectsError, setProjectsError] = useState(false);
   const [projectsLoading, setProjectsLoading] = useState(false);
 
   useEffect(() => {
+    setProjectsError(false);
     if (!activeWorkspace) {
       setRecentProjects([]);
       return;
@@ -147,6 +150,7 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
       })
       .catch(() => {
         if (!cancelled) {
+          setProjectsError(true);
           setRecentProjects([]);
         }
       })
@@ -170,10 +174,9 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
       title="Platform Overview"
       description={
         activeWorkspace
-          ? `Authenticated workspace "${activeWorkspace.name}" backed by PostgreSQL 17 and live backend telemetry.`
+          ? `Projects, connections and service health for ${activeWorkspace.name}.`
           : 'Live CloudForge control-plane overview and backend connectivity.'
       }
-      phaseBadge={{ label: 'Phase 2 Active', tone: 'info' }}
       actions={
         <button
           type="button"
@@ -218,43 +221,12 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
         />
       )}
 
-      <div className="cf-grid cf-grid--4" aria-label="Workspace and infrastructure telemetry">
-        <div className="cf-stat-tile">
-          <div className="cf-stat-tile__top">
-            <span className="cf-stat-tile__label">Workspace Projects</span>
-            <span className="cf-stat-tile__icon" aria-hidden="true">
-              <FolderKanban size={17} />
-            </span>
-          </div>
-          <div className="cf-stat-tile__value" data-testid="dashboard-project-count">
-            {activeWorkspace ? activeWorkspace.projectCount : 0}
-          </div>
-          <div className="cf-stat-tile__meta">
-            Persisted in PostgreSQL ·{' '}
-            <Link to="/projects" className="cf-link-accent">
-              Manage
-            </Link>
-          </div>
-        </div>
-
-        <div className="cf-stat-tile">
-          <div className="cf-stat-tile__top">
-            <span className="cf-stat-tile__label">Connected Repositories</span>
-            <span className="cf-stat-tile__icon" aria-hidden="true">
-              <GitBranch size={17} />
-            </span>
-          </div>
-          <div className="cf-stat-tile__value" data-testid="dashboard-repo-count">
-            {activeWorkspace ? activeWorkspace.connectedRepositoryCount : 0}
-          </div>
-          <div className="cf-stat-tile__meta">
-            {authConfig?.githubAppConfigured ? 'GitHub App active' : 'GitHub App setup required'} ·{' '}
-            <Link to="/repositories" className="cf-link-accent">
-              Explore
-            </Link>
-          </div>
-        </div>
-
+      <section className="cf-probe" aria-label="Control plane health">
+        <div className="cf-probe__readout">
+          <div className="cf-probe__label"><Server size={14} /> Control plane</div>
+          <h2>{isLoading && !snapshot ? 'Checking services' : snapshot?.networkError ? 'Connection unavailable' : backendHealthy && dbHealthy ? 'Services operational' : payload ? 'Service degradation' : 'Awaiting health probe'}</h2>
+          <p className="mono">GET /api/health</p>
+          <div className="cf-probe__services">
         <div className="cf-stat-tile">
           <div className="cf-stat-tile__top">
             <span className="cf-stat-tile__label">Backend API</span>
@@ -307,93 +279,51 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
               : 'Waiting for backend response'}
           </div>
         </div>
+          </div>
+        </div>
+        <ForgeStack />
+      </section>
+      <div className="cf-inventory" aria-label="Workspace and infrastructure telemetry">
+        <div className="cf-stat-tile">
+          <div className="cf-stat-tile__top">
+            <span className="cf-stat-tile__label">Workspace Projects</span>
+            <span className="cf-stat-tile__icon" aria-hidden="true">
+              <FolderKanban size={17} />
+            </span>
+          </div>
+          <div className="cf-stat-tile__value" data-testid="dashboard-project-count">
+            {activeWorkspace ? activeWorkspace.projectCount : 0}
+          </div>
+          <div className="cf-stat-tile__meta">
+            In this workspace ·{' '}
+            <Link to="/projects" className="cf-link-accent">
+              Manage
+            </Link>
+          </div>
+        </div>
+
+        <div className="cf-stat-tile">
+          <div className="cf-stat-tile__top">
+            <span className="cf-stat-tile__label">Connected Repositories</span>
+            <span className="cf-stat-tile__icon" aria-hidden="true">
+              <GitBranch size={17} />
+            </span>
+          </div>
+          <div className="cf-stat-tile__value" data-testid="dashboard-repo-count">
+            {activeWorkspace ? activeWorkspace.connectedRepositoryCount : 0}
+          </div>
+          <div className="cf-stat-tile__meta">
+            {authConfig?.githubAppConfigured ? 'GitHub App active' : 'GitHub App setup required'} ·{' '}
+            <Link to="/repositories" className="cf-link-accent">
+              Explore
+            </Link>
+          </div>
+        </div>
+
       </div>
-
-      <div className="cf-grid cf-grid--2">
-        <DashboardCard
-          title="Authenticated Session & Workspace"
-          subtitle="Verified server-side GitHub OAuth session and role-based access"
-          icon={<UserCheck size={17} />}
-          headerAction={
-            activeRole ? (
-              <StatusBadge label={`Role: ${activeRole}`} tone="info" size="sm" />
-            ) : undefined
-          }
-        >
-          <dl className="cf-kv-list">
-            <div className="cf-kv-item">
-              <dt>Signed-In User</dt>
-              <dd>
-                <strong>{user?.displayName || user?.username}</strong>{' '}
-                <span className="mono cf-muted">(@{user?.username})</span>
-              </dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Active Workspace</dt>
-              <dd>{activeWorkspace?.name ?? '—'}</dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Workspace Members</dt>
-              <dd className="mono">{activeWorkspace?.memberCount ?? 0}</dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Last Login</dt>
-              <dd className="mono">{formatTimestamp(user?.lastLoginAt)}</dd>
-            </div>
-          </dl>
-        </DashboardCard>
-
-        <DashboardCard
-          title="Live Backend Connectivity Details"
-          subtitle="Verified directly from GET /api/health — no mocked health status"
-          icon={<Server size={17} />}
-          highlight={Boolean(payload && backendHealthy)}
-          headerAction={
-            <StatusBadge
-              label={payload ? `HTTP ${snapshot?.httpStatus ?? 200}` : 'No Response'}
-              tone={
-                payload
-                  ? backendHealthy
-                    ? 'healthy'
-                    : 'degraded'
-                  : 'error'
-              }
-              size="sm"
-            />
-          }
-        >
-          <dl className="cf-kv-list">
-            <div className="cf-kv-item">
-              <dt>Application Name</dt>
-              <dd className="mono">{payload?.application ?? 'Unavailable'}</dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Version</dt>
-              <dd className="mono">{payload?.version ?? '—'}</dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Database Check</dt>
-              <dd>{payload?.database.message ?? 'Could not contact backend'}</dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Database Engine</dt>
-              <dd className="mono">{payload?.database.engine ?? '—'}</dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Correlation Request ID</dt>
-              <dd className="mono">{snapshot?.requestId ?? '—'}</dd>
-            </div>
-            <div className="cf-kv-item">
-              <dt>Server ISO-8601 Timestamp</dt>
-              <dd className="mono">{payload?.timestamp ?? '—'}</dd>
-            </div>
-          </dl>
-        </DashboardCard>
-      </div>
-
       <DashboardCard
         title="Recent Workspace Projects"
-        subtitle="Latest projects persisted in PostgreSQL for your active workspace"
+        subtitle="Recently updated projects in this workspace"
         icon={<FolderKanban size={17} />}
         headerAction={
           <Link to="/projects" className="btn btn-sm">
@@ -407,6 +337,8 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
             title="Loading workspace projects"
             description="Querying persistent project records..."
           />
+        ) : projectsError ? (
+          <ErrorState title="Recent projects unavailable" message="Open Projects to retry loading this workspace." />
         ) : (
           <DataTable
             columns={[
@@ -460,6 +392,89 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
         )}
       </DashboardCard>
 
+      <div className="cf-grid cf-grid--2">
+        <DashboardCard
+          title="Authenticated Session & Workspace"
+          subtitle="Verified server-side GitHub OAuth session and role-based access"
+          icon={<UserCheck size={17} />}
+          headerAction={
+            activeRole ? (
+              <StatusBadge label={`Role: ${activeRole}`} tone="info" size="sm" />
+            ) : undefined
+          }
+        >
+          <dl className="cf-kv-list">
+            <div className="cf-kv-item">
+              <dt>Signed-In User</dt>
+              <dd>
+                <strong>{user?.displayName || user?.username}</strong>{' '}
+                <span className="mono cf-muted">(@{user?.username})</span>
+              </dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Active Workspace</dt>
+              <dd>{activeWorkspace?.name ?? '—'}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Workspace Members</dt>
+              <dd className="mono">{activeWorkspace?.memberCount ?? 0}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Last Login</dt>
+              <dd className="mono">{formatTimestamp(user?.lastLoginAt)}</dd>
+            </div>
+          </dl>
+        </DashboardCard>
+
+        <DashboardCard
+          title="Live Backend Connectivity Details"
+          subtitle="Latest response from the workspace health endpoint"
+          icon={<Server size={17} />}
+          highlight={Boolean(payload && backendHealthy)}
+          headerAction={
+            <StatusBadge
+              label={payload ? `HTTP ${snapshot?.httpStatus ?? 200}` : 'No Response'}
+              tone={
+                payload
+                  ? backendHealthy
+                    ? 'healthy'
+                    : 'degraded'
+                  : 'error'
+              }
+              size="sm"
+            />
+          }
+        >
+          <dl className="cf-kv-list">
+            <div className="cf-kv-item">
+              <dt>Application Name</dt>
+              <dd className="mono">{payload?.application ?? 'Unavailable'}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Version</dt>
+              <dd className="mono">{payload?.version ?? '—'}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Database Check</dt>
+              <dd>{payload?.database.message ?? 'Could not contact backend'}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Database Engine</dt>
+              <dd className="mono">{payload?.database.engine ?? '—'}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Correlation Request ID</dt>
+              <dd className="mono">{snapshot?.requestId ?? '—'}</dd>
+            </div>
+            <div className="cf-kv-item">
+              <dt>Server ISO-8601 Timestamp</dt>
+              <dd className="mono">{payload?.timestamp ?? '—'}</dd>
+            </div>
+          </dl>
+        </DashboardCard>
+      </div>
+
+      <details className="cf-roadmap"><summary>Platform capabilities and roadmap</summary>
       <div className="cf-notice cf-notice--warning">
         <div className="cf-notice__icon" aria-hidden="true">
           <ShieldCheck size={18} />
@@ -489,6 +504,7 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
           caption="CloudForge implemented and planned capabilities"
         />
       </DashboardCard>
+      </details>
     </PageContainer>
   );
 }

@@ -1,8 +1,9 @@
+import { SearchField } from '../components/SearchField';
+import { Toast } from '../components/Toast';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertCircle,
-  CheckCircle2,
   ExternalLink,
   FolderKanban,
   Pencil,
@@ -146,7 +147,14 @@ export function ProjectsPage() {
 
     const trimmedName = form.name.trim();
     if (trimmedName.length < 2) {
+      document.getElementById('cf-proj-name')?.focus();
       setFieldErrors({ name: 'Project name must be at least 2 characters' });
+      return;
+    }
+
+    if (!form.defaultBranch.trim()) {
+      setFieldErrors({ defaultBranch: 'Enter a default branch.' });
+      document.getElementById('cf-proj-branch')?.focus();
       return;
     }
 
@@ -330,17 +338,7 @@ export function ProjectsPage() {
         </button>
       }
     >
-      {successMessage && (
-        <div className="cf-notice cf-notice--success" role="status">
-          <div className="cf-notice__icon" aria-hidden="true">
-            <CheckCircle2 size={18} />
-          </div>
-          <div>
-            <p className="cf-notice__title">Success</p>
-            <p className="cf-notice__text">{successMessage}</p>
-          </div>
-        </div>
-      )}
+      {successMessage && <Toast message={successMessage} onDismiss={() => setSuccessMessage(null)} />}
 
       {errorMessage && (
         <ErrorState
@@ -365,17 +363,8 @@ export function ProjectsPage() {
         }
       >
         <div className="cf-toolbar">
-          <input
-            type="search"
-            className="cf-search-input"
-            placeholder="Search projects by name, slug, or description..."
-            value={search}
-            onChange={(event) => {
-              setPage(0);
-              setSearch(event.target.value);
-            }}
-            aria-label="Search projects"
-          />
+          <SearchField label="Search projects" placeholder="Search projects by name, slug, or description..." value={search}
+            onChange={value => { setPage(0); setSearch(value); }} />
           <div className="cf-filter-group">
             <label htmlFor="cf-project-status-filter" className="sr-only">
               Filter by status
@@ -454,7 +443,7 @@ export function ProjectsPage() {
         }
         onClose={() => setModalMode(null)}
       >
-        <form className="cf-form" onSubmit={(e) => void handleSubmit(e)}>
+        <form noValidate className="cf-form" onSubmit={(e) => void handleSubmit(e)}>
           {formError && (
             <div className="cf-notice cf-notice--error" role="alert">
               <div className="cf-notice__icon" aria-hidden="true">
@@ -473,6 +462,8 @@ export function ProjectsPage() {
             </label>
             <input
               id="cf-proj-name"
+              aria-invalid={Boolean(fieldErrors.name)}
+              aria-describedby={fieldErrors.name ? 'cf-proj-name-error' : undefined}
               type="text"
               className="cf-input"
               required
@@ -483,7 +474,7 @@ export function ProjectsPage() {
               onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
             {fieldErrors.name && (
-              <span className="cf-field__error">{fieldErrors.name}</span>
+              <span id="cf-proj-name-error" className="cf-field__error">{fieldErrors.name}</span>
             )}
           </div>
 
@@ -493,7 +484,7 @@ export function ProjectsPage() {
             </label>
             <textarea
               id="cf-proj-desc"
-              className="cf-textarea"
+              className="cf-textarea resize-none" rows={4}
               maxLength={1000}
               placeholder="Briefly describe this service or application..."
               value={form.description}
@@ -539,6 +530,8 @@ export function ProjectsPage() {
               </label>
               <input
                 id="cf-proj-branch"
+              aria-invalid={Boolean(fieldErrors.defaultBranch)}
+              aria-describedby={fieldErrors.defaultBranch ? 'cf-proj-branch-error' : undefined}
                 type="text"
                 className="cf-input mono"
                 required
@@ -546,7 +539,7 @@ export function ProjectsPage() {
                 onChange={(e) => setForm({ ...form, defaultBranch: e.target.value })}
               />
               {fieldErrors.defaultBranch && (
-                <span className="cf-field__error">{fieldErrors.defaultBranch}</span>
+                <span id="cf-proj-branch-error" className="cf-field__error">{fieldErrors.defaultBranch}</span>
               )}
             </div>
 

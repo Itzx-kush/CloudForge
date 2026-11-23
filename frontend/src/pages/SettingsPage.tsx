@@ -1,8 +1,10 @@
+import { ValidatedForm } from '../components/ValidatedForm';
+import { Appearance } from '../components/Appearance';
+import { Toast } from '../components/Toast';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   AlertCircle,
   Building2,
-  CheckCircle2,
   ClipboardList,
   Github,
   Plus,
@@ -336,17 +338,8 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
       description="Account profile, workspace RBAC membership, GitHub integration status, and workspace audit history."
       phaseBadge={{ label: 'Phase 2 Identity & RBAC', tone: 'healthy' }}
     >
-      {notice && (
-        <div className="cf-notice cf-notice--success" role="status">
-          <div className="cf-notice__icon" aria-hidden="true">
-            <CheckCircle2 size={18} />
-          </div>
-          <div>
-            <p className="cf-notice__title">Saved</p>
-            <p className="cf-notice__text">{notice}</p>
-          </div>
-        </div>
-      )}
+      <Appearance />
+      {notice && <Toast message={notice} onDismiss={() => setNotice(null)} />}
 
       {errorBanner && (
         <div className="cf-notice cf-notice--error" role="alert">
@@ -459,7 +452,7 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
             ) : undefined
           }
         >
-          <form className="cf-form" onSubmit={(e) => void handleUpdateWorkspace(e)}>
+          <ValidatedForm className="cf-form" onSubmit={(e) => void handleUpdateWorkspace(e)}>
             <div className="cf-field">
               <label htmlFor="cf-ws-name" className="cf-field__label">
                 Workspace Name
@@ -495,7 +488,7 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
                 </button>
               </div>
             )}
-          </form>
+          </ValidatedForm>
         </DashboardCard>
 
         <DashboardCard
@@ -503,7 +496,7 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
           subtitle="Provision a dedicated team workspace where you start as OWNER"
           icon={<Plus size={17} />}
         >
-          <form className="cf-form" onSubmit={(e) => void handleCreateWorkspace(e)}>
+          <ValidatedForm className="cf-form" onSubmit={(e) => void handleCreateWorkspace(e)}>
             <div className="cf-field">
               <label htmlFor="cf-new-ws-name" className="cf-field__label">
                 New Workspace Name *
@@ -538,7 +531,7 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
                 <span>{isCreatingWs ? 'Creating...' : 'Create Workspace'}</span>
               </button>
             </div>
-          </form>
+          </ValidatedForm>
         </DashboardCard>
       </div>
 
@@ -551,7 +544,7 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
         }
       >
         {isOwner && (
-          <form
+          <ValidatedForm
             className="cf-toolbar"
             onSubmit={(e) => void handleAddMember(e)}
             style={{ marginBottom: '16px' }}
@@ -581,7 +574,7 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
                 <span>{isInviting ? 'Adding...' : 'Add Member'}</span>
               </button>
             </div>
-          </form>
+          </ValidatedForm>
         )}
 
         {membersLoading ? (

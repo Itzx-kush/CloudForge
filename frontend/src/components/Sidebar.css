@@ -4,7 +4,7 @@
   left: 0;
   bottom: 0;
   width: var(--sidebar-width);
-  background: rgba(10, 16, 29, 0.96);
+  background: var(--bg-surface);
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
@@ -32,11 +32,11 @@
   height: 34px;
   border-radius: 9px;
   background: var(--accent-gradient);
-  color: #040814;
+  color: var(--on-accent);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px rgba(56, 189, 248, 0.25);
+  box-shadow: 0 4px 16px var(--border-accent);
 }
 
 .cf-sidebar__name {
@@ -148,8 +148,8 @@
 
 .cf-sidebar__link--active {
   color: var(--text-primary);
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(56, 189, 248, 0.25);
+  background: var(--accent-soft);
+  border-color: var(--border-accent);
 }
 
 .cf-sidebar__link--active svg {
@@ -164,7 +164,7 @@
 .cf-sidebar__status-card {
   padding: 12px;
   border-radius: var(--radius-md);
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
 }
 
