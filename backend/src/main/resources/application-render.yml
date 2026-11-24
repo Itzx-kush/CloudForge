@@ -28,3 +28,8 @@ cloudforge:
     enabled: false
     allow-local-dev-registry: false
     allow-insecure-local-credential-delivery: false
+  kubernetes:
+    enabled: false
+    allow-local-dev-clusters: false
+    allow-insecure-local-credential-delivery: false
+    allow-production-deployments: false

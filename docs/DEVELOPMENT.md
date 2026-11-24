@@ -1,6 +1,6 @@
 # CloudForge Local Development Guide
 
-This guide covers setting up, running, testing, migrating, and troubleshooting CloudForge (Phases 1–3.3) on Windows 11 (PowerShell + WSL 2 Docker Desktop), macOS, and Linux.
+This guide covers setting up, running, testing, migrating, and troubleshooting CloudForge (Phases 1–3.6) on Windows 11 (PowerShell + WSL 2 Docker Desktop), macOS, and Linux.
 
 ---
 
@@ -79,7 +79,7 @@ This guide covers setting up, running, testing, migrating, and troubleshooting C
 
 ## 3. Database Migrations (Flyway)
 
-- Migrations live in `backend/src/main/resources/db/migration/` (`V1__phase2_core_schema.sql`, `V2__webhook_deliveries.sql`, `V3__github_actions_workflows.sql`, `V4__pipeline_orchestration_engine.sql`, `V5__isolated_worker_execution.sql`).
+- Migrations live in `backend/src/main/resources/db/migration/` (`V1__phase2_core_schema.sql` through `V9__kubernetes_deployment_engine.sql`).
 - Hibernate DDL generation is disabled (`spring.jpa.hibernate.ddl-auto: none` in runtime; `validate` in test profile).
 - **Do not run `docker compose down -v`** unless you explicitly intend to wipe your local PostgreSQL volume. Use `docker compose down` or `docker compose up -d --build` to preserve existing data across restarts.
 - Inspect applied migrations in PostgreSQL:
@@ -182,6 +182,7 @@ curl -i http://localhost:8080/api/health   # Expect HTTP 200 UP
 | Secret create/rotate returns `503 Service Unavailable` | `CLOUDFORGE_SECRETS_ENABLED=false` or invalid/missing `CLOUDFORGE_SECRETS_KEYRING` | Provision valid 256-bit Base64 KEK(s) (`openssl rand -base64 32`) via environment variables and restart |
 | `compose.yaml` port bind failure on `5432` or `8080` | Another local PostgreSQL or Java service uses that port | Stop the conflicting service or override `POSTGRES_PORT` / `BACKEND_PORT` in `.env` |
 
-## Dedicated GitHub source worker
+## Dedicated GitHub source, OCI BuildKit & Kubernetes deployment workers
 
-The Phase 3.5 draft adds a source-only worker for development over HTTPS. See the [source acquisition runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md) for GitHub App permissions, operator allowlists, and verification steps.
+- **Phase 3.5 (Source & OCI BuildKit):** See the [OCI builds & registry runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md) for GitHub App permissions, BuildKit worker isolation, and local registry verification.
+- **Phase 3.6 (Kubernetes Deployment Engine):** By default, Kubernetes deployment execution is **disabled** (`CLOUDFORGE_K8S_ENABLED=false`, locked off in `application-render.yml`). Never mount kubeconfig files or install `kubectl` inside the Spring Boot web server. To run a dedicated local `KUBERNETES_DEPLOY` worker against a disposable local `kind`/`k3d`/`k3s` cluster, provision an isolated namespace via `infrastructure/kubernetes/local/provision-local-namespace.ps1` (or `.sh`), store the short-lived `cloudforge-deployer` bearer token in Phase 3.4 Encrypted Secrets, and follow the complete runbook in [`docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`](PHASE3_6_KUBERNETES_DEPLOYMENT.md).

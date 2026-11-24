@@ -9,6 +9,22 @@ import com.cloudforge.backend.secrets.entity.EnvironmentSecretVersionEntity;
 import com.cloudforge.backend.secrets.entity.SecretLifecycleStatus;
 import com.cloudforge.backend.secrets.repository.EnvironmentSecretRepository;
 import com.cloudforge.backend.secrets.repository.EnvironmentSecretVersionRepository;
+import com.cloudforge.backend.k8s.entity.KubernetesClusterConnectionEntity;
+import com.cloudforge.backend.k8s.entity.KubernetesClusterStatus;
+import com.cloudforge.backend.k8s.entity.KubernetesClusterType;
+import com.cloudforge.backend.k8s.entity.KubernetesDeploymentConfigEntity;
+import com.cloudforge.backend.k8s.entity.KubernetesDeploymentEventEntity;
+import com.cloudforge.backend.k8s.entity.KubernetesDeploymentOperationEntity;
+import com.cloudforge.backend.k8s.entity.KubernetesDeploymentStatus;
+import com.cloudforge.backend.k8s.entity.KubernetesNamespaceBindingEntity;
+import com.cloudforge.backend.k8s.entity.KubernetesNamespaceBindingStatus;
+import com.cloudforge.backend.k8s.entity.KubernetesNetworkPolicyMode;
+import com.cloudforge.backend.k8s.entity.KubernetesPodSecurityStandard;
+import com.cloudforge.backend.k8s.repository.KubernetesClusterConnectionRepository;
+import com.cloudforge.backend.k8s.repository.KubernetesDeploymentConfigRepository;
+import com.cloudforge.backend.k8s.repository.KubernetesDeploymentEventRepository;
+import com.cloudforge.backend.k8s.repository.KubernetesDeploymentOperationRepository;
+import com.cloudforge.backend.k8s.repository.KubernetesNamespaceBindingRepository;
 import com.cloudforge.backend.oci.entity.OciArtifactRetentionPolicy;
 import com.cloudforge.backend.oci.entity.OciArtifactVerificationStatus;
 import com.cloudforge.backend.oci.entity.OciBuildMode;
@@ -202,6 +218,21 @@ class PostgresSearchQueryRegressionTest {
 
     @Autowired
     private StageExecutionAttemptRepository stageExecutionAttemptRepository;
+
+    @Autowired
+    private KubernetesClusterConnectionRepository k8sClusterRepository;
+
+    @Autowired
+    private KubernetesNamespaceBindingRepository k8sNamespaceRepository;
+
+    @Autowired
+    private KubernetesDeploymentConfigRepository k8sConfigRepository;
+
+    @Autowired
+    private KubernetesDeploymentOperationRepository k8sOperationRepository;
+
+    @Autowired
+    private KubernetesDeploymentEventRepository k8sEventRepository;
 
     private UserEntity ownerA;
     private UserEntity ownerB;
@@ -720,7 +751,7 @@ class PostgresSearchQueryRegressionTest {
         pgArt.setVerifiedAt(Instant.now());
         pgArt.setPublishedAt(Instant.now());
         pgArt.setRetentionPolicy(OciArtifactRetentionPolicy.RETAIN_METADATA);
-        ociImageArtifactRepository.saveAndFlush(pgArt);
+        pgArt = ociImageArtifactRepository.saveAndFlush(pgArt);
 
         assertThat(ociBuildRecordRepository.searchByWorkspace(workspaceA.getId(), null, null, null, PageRequest.of(0, 10)).getTotalElements()).isEqualTo(1);
         assertThat(ociBuildRecordRepository.searchByWorkspace(workspaceA.getId(), projectA1.getId(), OciBuildStatus.SUCCEEDED, "pg-demo", PageRequest.of(0, 10)).getTotalElements()).isEqualTo(1);
@@ -737,6 +768,141 @@ class PostgresSearchQueryRegressionTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.items[0].manifestDigest").value(pgDigest));
+
+        // Phase 3.6 PostgreSQL V9 Kubernetes clusters, namespaces, configs, deployments, events & typed Criteria search
+        KubernetesClusterConnectionEntity pgCluster = new KubernetesClusterConnectionEntity();
+        pgCluster.setWorkspace(workspaceA);
+        pgCluster.setName("PG Local K3s Cluster");
+        pgCluster.setSlug("pg-local-k3s");
+        pgCluster.setClusterIdentifier("k3s-pg-verify");
+        pgCluster.setClusterType(KubernetesClusterType.K3S_LOCAL);
+        pgCluster.setEnvironmentCategory(EnvironmentType.STAGING);
+        pgCluster.setApiServerUrl("https://127.0.0.1:16443");
+        pgCluster.setCaCertificatePem("-----BEGIN CERTIFICATE-----\nPG_TEST_CA\n-----END CERTIFICATE-----");
+        pgCluster.setCaCertificateFingerprintSha256("a".repeat(64));
+        pgCluster.setCredentialProject(projectA1);
+        pgCluster.setCredentialEnvironment(pgEnv);
+        pgCluster.setBearerTokenSecret(pgSecret);
+        pgCluster.setServiceAccountName("cloudforge-deployer");
+        pgCluster.setAllowLocalLoopback(true);
+        pgCluster.setConnectionStatus(KubernetesClusterStatus.VALIDATED);
+        pgCluster.setKubernetesVersion("v1.31.2+k3s1");
+        pgCluster.setSupportedCapabilitiesJson("{\"appsV1Available\":true}");
+        pgCluster.setCreatedBy(ownerA);
+        pgCluster.setUpdatedBy(ownerA);
+        pgCluster = k8sClusterRepository.saveAndFlush(pgCluster);
+
+        KubernetesNamespaceBindingEntity pgNs = new KubernetesNamespaceBindingEntity();
+        pgNs.setWorkspace(workspaceA);
+        pgNs.setClusterConnection(pgCluster);
+        pgNs.setProject(projectA1);
+        pgNs.setEnvironment(pgEnv);
+        pgNs.setNamespaceName("cf-pg01-payments-stg");
+        pgNs.setWorkloadServiceAccountName("cloudforge-workload");
+        pgNs.setPodSecurityStandard(KubernetesPodSecurityStandard.RESTRICTED);
+        pgNs.setNetworkPolicyMode(KubernetesNetworkPolicyMode.ENFORCED_VERIFIED);
+        pgNs.setResourceQuotaConfigured(true);
+        pgNs.setLimitRangeConfigured(true);
+        pgNs.setStatus(KubernetesNamespaceBindingStatus.ACTIVE);
+        pgNs.setCreatedBy(ownerA);
+        pgNs = k8sNamespaceRepository.saveAndFlush(pgNs);
+
+        KubernetesDeploymentConfigEntity pgCfg = new KubernetesDeploymentConfigEntity();
+        pgCfg.setWorkspace(workspaceA);
+        pgCfg.setProject(projectA1);
+        pgCfg.setEnvironment(pgEnv);
+        pgCfg.setClusterConnection(pgCluster);
+        pgCfg.setNamespaceBinding(pgNs);
+        pgCfg.setNamespaceName(pgNs.getNamespaceName());
+        pgCfg.setDeploymentName("payments-pg-100");
+        pgCfg.setServiceName("payments-pg-100");
+        pgCfg.setReplicaCount(2);
+        pgCfg.setContainerPort(8080);
+        pgCfg.setServicePort(80);
+        pgCfg.setCpuRequest("100m");
+        pgCfg.setCpuLimit("500m");
+        pgCfg.setMemoryRequest("128Mi");
+        pgCfg.setMemoryLimit("512Mi");
+        pgCfg.setReadinessProbeJson("{\"type\":\"HTTP_GET\",\"path\":\"/healthz\",\"port\":8080}");
+        pgCfg.setLivenessProbeJson("{\"type\":\"HTTP_GET\",\"path\":\"/healthz\",\"port\":8080}");
+        pgCfg.setRollingMaxSurge("1");
+        pgCfg.setRollingMaxUnavailable("0");
+        pgCfg.setProgressDeadlineSeconds(300);
+        pgCfg.setDeploymentTimeoutSeconds(300);
+        pgCfg.setReadOnlyRootFilesystem(true);
+        pgCfg.setRunAsNonRoot(true);
+        pgCfg.setRunAsUser(10001L);
+        pgCfg.setConfigChecksumSha256("b".repeat(64));
+        pgCfg.setCreatedBy(ownerA);
+        pgCfg.setUpdatedBy(ownerA);
+        pgCfg = k8sConfigRepository.saveAndFlush(pgCfg);
+
+        KubernetesDeploymentOperationEntity pgOp = new KubernetesDeploymentOperationEntity();
+        pgOp.setWorkspace(workspaceA);
+        pgOp.setProject(projectA1);
+        pgOp.setEnvironment(pgEnv);
+        pgOp.setClusterConnection(pgCluster);
+        pgOp.setNamespaceBinding(pgNs);
+        pgOp.setDeploymentConfig(pgCfg);
+        pgOp.setOciArtifact(pgArt);
+        pgOp.setPipelineRun(anyStage.getPipelineRun());
+        pgOp.setStageRun(anyStage);
+        pgOp.setAttempt(anyAttempt);
+        pgOp.setNamespaceName(pgNs.getNamespaceName());
+        pgOp.setDeploymentName("payments-pg-100");
+        pgOp.setServiceName("payments-pg-100");
+        pgOp.setImmutableImageReference(pgArt.getImmutableReference());
+        pgOp.setManifestDigest(pgDigest);
+        pgOp.setSourceCommitSha(pgArt.getCommitSha());
+        pgOp.setManifestChecksumSha256("c".repeat(64));
+        pgOp.setConfigSnapshotJson("{\"replicaCount\":2}");
+        pgOp.setRequestedReplicas(2);
+        pgOp.setObservedReplicas(2);
+        pgOp.setUpdatedReplicas(2);
+        pgOp.setReadyReplicas(2);
+        pgOp.setAvailableReplicas(2);
+        pgOp.transitionStatus(KubernetesDeploymentStatus.VALIDATING, Instant.now());
+        pgOp.transitionStatus(KubernetesDeploymentStatus.APPLYING, Instant.now());
+        pgOp.transitionStatus(KubernetesDeploymentStatus.ROLLING_OUT, Instant.now());
+        pgOp.transitionStatus(KubernetesDeploymentStatus.VERIFYING, Instant.now());
+        pgOp.transitionStatus(KubernetesDeploymentStatus.SUCCEEDED, Instant.now());
+        pgOp.setApplyInitiated(true);
+        pgOp.setRequestedBy(ownerA);
+        pgOp = k8sOperationRepository.saveAndFlush(pgOp);
+
+        KubernetesDeploymentEventEntity pgEv = new KubernetesDeploymentEventEntity();
+        pgEv.setWorkspace(workspaceA);
+        pgEv.setDeploymentOperation(pgOp);
+        pgEv.setEventType("DEPLOYMENT_SUCCEEDED");
+        pgEv.setFromStatus("VERIFYING");
+        pgEv.setToStatus("SUCCEEDED");
+        pgEv.setActorLabel("worker:pg-k8s-worker");
+        pgEv.setMessage("Verified 2/2 ready replicas on PostgreSQL 17");
+        pgEv.setMetadataJson("{}");
+        pgEv.setOccurredAt(Instant.now());
+        k8sEventRepository.saveAndFlush(pgEv);
+
+        // Typed Criteria search on PostgreSQL 17 with null, populated, and literal '%' filters (zero lower(bytea) errors)
+        assertThat(k8sOperationRepository.searchByWorkspace(workspaceA.getId(), null, null, null, null, null, PageRequest.of(0, 10))
+                .getTotalElements()).isEqualTo(1);
+        assertThat(k8sOperationRepository.searchByWorkspace(
+                workspaceA.getId(), projectA1.getId(), pgEnv.getId(), pgCluster.getId(),
+                KubernetesDeploymentStatus.SUCCEEDED, "payments-pg", PageRequest.of(0, 10))
+                .getTotalElements()).isEqualTo(1);
+        assertThat(k8sOperationRepository.searchByWorkspace(workspaceA.getId(), null, null, null, null, "%", PageRequest.of(0, 10))
+                .getTotalElements()).isZero();
+
+        mockMvc.perform(get("/api/workspaces/" + workspaceA.getId() + "/clusters").with(authenticatedUser(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].clusterIdentifier").value("k3s-pg-verify"));
+        mockMvc.perform(get("/api/workspaces/" + workspaceA.getId() + "/deployments").with(authenticatedUser(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].manifestDigest").value(pgDigest));
+        mockMvc.perform(get("/api/workspaces/" + workspaceA.getId() + "/deployments/" + pgOp.getId() + "/events")
+                        .with(authenticatedUser(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventType").value("DEPLOYMENT_SUCCEEDED"));
     }
 
     private LinkedRepositoryEntity saveRepo(

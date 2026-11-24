@@ -34,7 +34,7 @@ public final class CloudForgeWorkerApplication {
                 System.exit(2);
                 return;
             }
-        } else if (!config.sourceOnly() && !adapter.isAvailable()) {
+        } else if (!config.sourceOnly() && !config.kubernetesDeployEnabled() && !adapter.isAvailable()) {
             log.error("Local Docker daemon is not reachable. Start Docker Engine before launching CloudForge worker.");
             System.exit(2);
             return;

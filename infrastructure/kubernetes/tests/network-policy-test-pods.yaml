@@ -1,0 +1,30 @@
+# Disposable NetworkPolicy verification probe pod template (Restricted PSA compliant).
+# Deploy into a separate unauthorized namespace to verify cross-namespace traffic is blocked
+# when running a policy-capable CNI (e.g., k3s kube-router, Calico, or Cilium).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cloudforge-netpol-probe
+  labels:
+    app.kubernetes.io/managed-by: cloudforge-test
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 60"]
+      securityContext:
+        privileged: false
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests: { cpu: "25m", memory: "32Mi" }
+        limits: { cpu: "100m", memory: "64Mi" }

@@ -3,6 +3,10 @@ package com.cloudforge.worker.agent;
 import com.cloudforge.worker.client.ControlPlaneClient;
 import com.cloudforge.worker.config.WorkerAgentConfig;
 import com.cloudforge.worker.executor.IsolatedExecutionAdapter;
+import com.cloudforge.worker.k8s.KubernetesApiClient;
+import com.cloudforge.worker.k8s.KubernetesClusterValidator;
+import com.cloudforge.worker.k8s.KubernetesDeploymentExecutor;
+import com.cloudforge.worker.k8s.OfficialKubernetesApiClient;
 import com.cloudforge.worker.oci.BuildKitExecutionAdapter;
 import com.cloudforge.worker.oci.DockerfilePolicyValidator;
 import com.cloudforge.worker.oci.OciLayoutInspector;
@@ -46,6 +50,9 @@ public class WorkerAgentLoop implements AutoCloseable {
     private final IsolatedExecutionAdapter adapter;
     private final BuildKitExecutionAdapter buildKitAdapter;
     private final OciRegistryClient ociRegistryClient;
+    private final KubernetesApiClient kubernetesApiClient;
+    private final KubernetesClusterValidator kubernetesClusterValidator;
+    private final KubernetesDeploymentExecutor kubernetesDeploymentExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Map<UUID, ActiveExecutionContext> activeExecutions = new ConcurrentHashMap<>();
     private ScheduledExecutorService heartbeatScheduler;
@@ -55,7 +62,8 @@ public class WorkerAgentLoop implements AutoCloseable {
             ControlPlaneClient client,
             IsolatedExecutionAdapter adapter
     ) {
-        this(config, client, adapter, new BuildKitExecutionAdapter(config), new OciRegistryClient());
+        this(config, client, adapter, new BuildKitExecutionAdapter(config), new OciRegistryClient(),
+                new OfficialKubernetesApiClient(config.allowLocalDevCluster()));
     }
 
     public WorkerAgentLoop(
@@ -65,11 +73,28 @@ public class WorkerAgentLoop implements AutoCloseable {
             BuildKitExecutionAdapter buildKitAdapter,
             OciRegistryClient ociRegistryClient
     ) {
+        this(config, client, adapter, buildKitAdapter, ociRegistryClient,
+                new OfficialKubernetesApiClient(config.allowLocalDevCluster()));
+    }
+
+    public WorkerAgentLoop(
+            WorkerAgentConfig config,
+            ControlPlaneClient client,
+            IsolatedExecutionAdapter adapter,
+            BuildKitExecutionAdapter buildKitAdapter,
+            OciRegistryClient ociRegistryClient,
+            KubernetesApiClient kubernetesApiClient
+    ) {
         this.config = config;
         this.client = client;
         this.adapter = adapter;
         this.buildKitAdapter = buildKitAdapter;
         this.ociRegistryClient = ociRegistryClient;
+        this.kubernetesApiClient = kubernetesApiClient;
+        this.kubernetesClusterValidator = new KubernetesClusterValidator(kubernetesApiClient);
+        this.kubernetesDeploymentExecutor = new KubernetesDeploymentExecutor(
+                kubernetesApiClient, config.k8sRolloutPollIntervalMs()
+        );
     }
 
     public void registerWorker() {
@@ -77,6 +102,8 @@ public class WorkerAgentLoop implements AutoCloseable {
                 ? "GITHUB_SOURCE"
                 : config.ociBuildKitEnabled()
                 ? "OCI_BUILDKIT"
+                : config.kubernetesDeployEnabled()
+                ? "KUBERNETES_DEPLOY"
                 : adapter.adapterType();
         client.register(new ControlPlaneClient.RegistrationPayload(
                 config.workerId(),
@@ -131,15 +158,87 @@ public class WorkerAgentLoop implements AutoCloseable {
     }
 
     /**
-     * Executes one atomic claim-and-run cycle. Returns {@code true} if a stage lease was claimed
-     * and executed, {@code false} if no eligible work was available.
+     * Executes one atomic claim-and-run cycle. Returns {@code true} if a cluster validation
+     * or stage lease was claimed and executed, {@code false} if no eligible work was available.
      */
     public boolean runSingleClaimCycle() {
+        if (config.kubernetesDeployEnabled() && runSingleClusterValidationCycle()) {
+            return true;
+        }
         Optional<ControlPlaneClient.ClaimedStageLease> leaseOpt = client.claimNextStage(config.workerId());
         if (leaseOpt.isEmpty()) {
             return false;
         }
         executeClaimedLease(leaseOpt.get());
+        return true;
+    }
+
+    public boolean runSingleClusterValidationCycle() {
+        if (!config.kubernetesDeployEnabled()) {
+            return false;
+        }
+        Optional<ControlPlaneClient.ClusterValidationTask> taskOpt = client.claimClusterValidation(config.workerId());
+        if (taskOpt.isEmpty()) {
+            return false;
+        }
+        ControlPlaneClient.ClusterValidationTask task = taskOpt.get();
+        char[] bearerChars = null;
+        WorkerSecretRedactor redactor = new WorkerSecretRedactor();
+        try {
+            ControlPlaneClient.ClusterCredentialsResult creds = client.fetchClusterValidationCredentials(
+                    config.workerId(), task.clusterId(), task.validationNonce()
+            );
+            if (creds != null && creds.bearerToken() != null) {
+                redactor.addSecrets(List.of(creds.bearerToken()));
+                bearerChars = creds.bearerToken().toCharArray();
+            }
+            KubernetesApiClient.ClusterConnectionContext ctx = new KubernetesApiClient.ClusterConnectionContext(
+                    creds.apiServerUrl(),
+                    creds.caCertificatePem(),
+                    bearerChars,
+                    creds.allowLocalLoopback() && config.allowLocalDevCluster(),
+                    15
+            );
+            KubernetesClusterValidator.ValidationOutcome outcome = kubernetesClusterValidator.validate(task, ctx);
+            client.completeClusterValidation(
+                    config.workerId(),
+                    task.clusterId(),
+                    new ControlPlaneClient.ClusterValidationResultPayload(
+                            task.validationNonce(),
+                            outcome.valid(),
+                            outcome.kubernetesVersion(),
+                            outcome.supportedCapabilities(),
+                            outcome.verifiedNamespaces(),
+                            redactor.redact(outcome.errorSummary()),
+                            Instant.now()
+                    )
+            );
+            log.info("Completed cluster validation cluster={} valid={} version={}",
+                    task.clusterIdentifier(), outcome.valid(), outcome.kubernetesVersion());
+        } catch (Exception ex) {
+            String safeErr = redactor.redact(ex.getMessage());
+            try {
+                client.completeClusterValidation(
+                        config.workerId(),
+                        task.clusterId(),
+                        new ControlPlaneClient.ClusterValidationResultPayload(
+                                task.validationNonce(),
+                                false,
+                                null,
+                                Map.of(),
+                                List.of(),
+                                "Cluster validation error: " + (safeErr != null ? safeErr : "unexpected failure"),
+                                Instant.now()
+                        )
+                );
+            } catch (Exception ignored) {
+            }
+        } finally {
+            if (bearerChars != null) {
+                Arrays.fill(bearerChars, '\0');
+            }
+            redactor.clear();
+        }
         return true;
     }
 
@@ -222,11 +321,13 @@ public class WorkerAgentLoop implements AutoCloseable {
             boolean ociBuildOp = WorkerAgentConfig.OCI_BUILD_OPERATION.equals(lease.allowedOperation());
             boolean ociPublishOp = WorkerAgentConfig.OCI_PUBLISH_OPERATION.equals(lease.allowedOperation());
             boolean ociOperation = ociBuildOp || ociPublishOp;
+            boolean k8sDeployOp = WorkerAgentConfig.KUBERNETES_DEPLOY_OPERATION.equals(lease.allowedOperation());
 
             // Strict worker capability isolation: never cross-execute across worker adapter types
             if (sourceOperation != config.sourceOnly()
                     || ociOperation != config.ociBuildKitEnabled()
-                    || ((sourceOperation || ociOperation)
+                    || k8sDeployOp != config.kubernetesDeployEnabled()
+                    || ((sourceOperation || ociOperation || k8sDeployOp)
                     && (lease.hasSecretBindings() || (lease.secretAliases() != null && !lease.secretAliases().isEmpty())))) {
                 completeDeliveryFailure(lease, startedAt, "UNSUPPORTED_OPERATION", "Worker capability mismatch", redactor);
                 return;
@@ -277,6 +378,8 @@ public class WorkerAgentLoop implements AutoCloseable {
                 result = executeOciBuild(lease, startedAt, cancelSignal, logConsumer);
             } else if (ociPublishOp) {
                 result = executeOciPublish(lease, startedAt, cancelSignal, redactor, logConsumer);
+            } else if (k8sDeployOp) {
+                result = executeKubernetesDeploy(lease, startedAt, cancelSignal, redactor, logConsumer);
             } else {
                 IsolatedExecutionAdapter.ExecutionRequest execRequest = new IsolatedExecutionAdapter.ExecutionRequest(
                         lease.attemptId(),
@@ -736,6 +839,189 @@ public class WorkerAgentLoop implements AutoCloseable {
             client.reportOciPublishResult(config.workerId(), lease.attemptId(), payload);
         } catch (Exception ignored) {
         }
+    }
+
+    private IsolatedExecutionAdapter.ExecutionResult executeKubernetesDeploy(
+            ControlPlaneClient.ClaimedStageLease lease,
+            Instant startedAt,
+            AtomicBoolean cancelSignal,
+            WorkerSecretRedactor redactor,
+            IsolatedExecutionAdapter.LogLineConsumer logConsumer
+    ) {
+        char[] bearerChars = null;
+        try {
+            logConsumer.accept("SYSTEM", "[CloudForge K8s] Fetching deployment execution descriptor from control plane", Instant.now());
+            ControlPlaneClient.KubernetesExecutionDescriptor descriptor = client.fetchKubernetesDescriptor(
+                    config.workerId(), lease.attemptId(), lease.leaseToken(), lease.fencingGeneration()
+            );
+            if (descriptor == null) {
+                return failK8sDeploy(lease, startedAt, "K8S_MANIFEST_REJECTED", false,
+                        "Control plane returned empty Kubernetes deployment descriptor", logConsumer);
+            }
+            if (cancelSignal.get()) {
+                return cancelK8sDeploy(lease, startedAt, false, "Kubernetes deployment cancelled before credential fetch", logConsumer);
+            }
+
+            ControlPlaneClient.ClusterCredentialsResult creds = client.fetchKubernetesDeploymentCredentials(
+                    config.workerId(), lease.attemptId(), lease.leaseToken(), lease.fencingGeneration()
+            );
+            if (creds == null || creds.bearerToken() == null || creds.bearerToken().isBlank()) {
+                return failK8sDeploy(lease, startedAt, "CLUSTER_AUTH_FAILED", false,
+                        "Control plane did not provide valid Kubernetes cluster credentials", logConsumer);
+            }
+            redactor.addSecrets(List.of(creds.bearerToken()));
+            bearerChars = creds.bearerToken().toCharArray();
+
+            KubernetesApiClient.ClusterConnectionContext clusterCtx = new KubernetesApiClient.ClusterConnectionContext(
+                    creds.apiServerUrl(),
+                    creds.caCertificatePem(),
+                    bearerChars,
+                    creds.allowLocalLoopback() && config.allowLocalDevCluster(),
+                    15
+            );
+
+            KubernetesDeploymentExecutor.StatusReporter reporter = (
+                    status, applyInitiated, obs, upd, ready, avail, obsGen, depUid, svcUid, conds, pods, msg
+            ) -> client.reportKubernetesStatus(
+                    config.workerId(),
+                    lease.attemptId(),
+                    new ControlPlaneClient.KubernetesStatusUpdatePayload(
+                            lease.leaseToken(),
+                            lease.fencingGeneration(),
+                            status,
+                            applyInitiated,
+                            obs,
+                            upd,
+                            ready,
+                            avail,
+                            obsGen,
+                            depUid,
+                            svcUid,
+                            conds,
+                            pods,
+                            redactor.redact(msg)
+                    )
+            );
+
+            KubernetesDeploymentExecutor.DeploymentExecutionOutcome outcome = kubernetesDeploymentExecutor.execute(
+                    descriptor, clusterCtx, reporter, cancelSignal, logConsumer
+            );
+
+            String safeSummary = redactor.redact(outcome.summary());
+            client.reportKubernetesResult(
+                    config.workerId(),
+                    lease.attemptId(),
+                    new ControlPlaneClient.KubernetesResultPayload(
+                            lease.leaseToken(),
+                            lease.fencingGeneration(),
+                            outcome.deploymentStatus(),
+                            outcome.applyInitiated(),
+                            outcome.observedReplicas(),
+                            outcome.updatedReplicas(),
+                            outcome.readyReplicas(),
+                            outcome.availableReplicas(),
+                            outcome.observedGeneration(),
+                            outcome.k8sDeploymentUid(),
+                            outcome.k8sServiceUid(),
+                            outcome.verifiedImageDigest(),
+                            outcome.rolloutConditions(),
+                            outcome.podDiagnostics(),
+                            "NONE".equals(outcome.failureCategory()) ? null : outcome.failureCategory(),
+                            "SUCCEEDED".equals(outcome.deploymentStatus()) ? null : safeSummary,
+                            outcome.completedAt()
+                    )
+            );
+
+            String attemptStatus = switch (outcome.deploymentStatus()) {
+                case "SUCCEEDED" -> "SUCCEEDED";
+                case "CANCELLED" -> "CANCELLED";
+                case "RECONCILIATION_REQUIRED" -> "CANCELLED".equals(outcome.failureCategory()) ? "CANCELLED" : "FAILED";
+                default -> "FAILED";
+            };
+            String failureCat = "SUCCEEDED".equals(attemptStatus) ? "NONE"
+                    : ("CANCELLED".equals(attemptStatus) ? "CANCELLED" : outcome.failureCategory());
+
+            Map<String, Object> usage = new LinkedHashMap<>();
+            usage.put("adapter", "KUBERNETES_DEPLOY");
+            usage.put("namespace", descriptor.namespaceName());
+            usage.put("deploymentName", descriptor.deploymentName());
+            usage.put("readyReplicas", outcome.readyReplicas());
+            usage.put("requestedReplicas", descriptor.replicaCount());
+            if (outcome.verifiedImageDigest() != null) {
+                usage.put("verifiedImageDigest", outcome.verifiedImageDigest());
+            }
+
+            return new IsolatedExecutionAdapter.ExecutionResult(
+                    attemptStatus,
+                    failureCat,
+                    "SUCCEEDED".equals(attemptStatus) ? 0 : 1,
+                    safeSummary,
+                    usage,
+                    startedAt,
+                    outcome.completedAt(),
+                    true
+            );
+        } catch (Exception ex) {
+            String safeErr = redactor.redact(ex.getMessage());
+            return failK8sDeploy(lease, startedAt, "CLUSTER_UNAVAILABLE", false,
+                    "Kubernetes deployment execution error: " + safeErr, logConsumer);
+        } finally {
+            if (bearerChars != null) {
+                Arrays.fill(bearerChars, '\0');
+            }
+        }
+    }
+
+    private IsolatedExecutionAdapter.ExecutionResult failK8sDeploy(
+            ControlPlaneClient.ClaimedStageLease lease,
+            Instant startedAt,
+            String category,
+            boolean applyInitiated,
+            String summary,
+            IsolatedExecutionAdapter.LogLineConsumer logConsumer
+    ) {
+        logConsumer.accept("STDERR", "[CloudForge K8s] " + summary, Instant.now());
+        try {
+            client.reportKubernetesResult(
+                    config.workerId(),
+                    lease.attemptId(),
+                    new ControlPlaneClient.KubernetesResultPayload(
+                            lease.leaseToken(), lease.fencingGeneration(), "FAILED", applyInitiated,
+                            0, 0, 0, 0, null, null, null, null, List.of(), List.of(),
+                            category, summary, Instant.now()
+                    )
+            );
+        } catch (Exception ignored) {
+        }
+        return new IsolatedExecutionAdapter.ExecutionResult(
+                "FAILED", category, 1, summary, Map.of("adapter", "KUBERNETES_DEPLOY"), startedAt, Instant.now(), true
+        );
+    }
+
+    private IsolatedExecutionAdapter.ExecutionResult cancelK8sDeploy(
+            ControlPlaneClient.ClaimedStageLease lease,
+            Instant startedAt,
+            boolean applyInitiated,
+            String summary,
+            IsolatedExecutionAdapter.LogLineConsumer logConsumer
+    ) {
+        logConsumer.accept("SYSTEM", "[CloudForge K8s] " + summary, Instant.now());
+        try {
+            client.reportKubernetesResult(
+                    config.workerId(),
+                    lease.attemptId(),
+                    new ControlPlaneClient.KubernetesResultPayload(
+                            lease.leaseToken(), lease.fencingGeneration(),
+                            applyInitiated ? "RECONCILIATION_REQUIRED" : "CANCELLED",
+                            applyInitiated, 0, 0, 0, 0, null, null, null, null,
+                            List.of(), List.of(), "CANCELLED", summary, Instant.now()
+                    )
+            );
+        } catch (Exception ignored) {
+        }
+        return new IsolatedExecutionAdapter.ExecutionResult(
+                "CANCELLED", "CANCELLED", 143, summary, Map.of("adapter", "KUBERNETES_DEPLOY"), startedAt, Instant.now(), true
+        );
     }
 
     private void completeDeliveryFailure(

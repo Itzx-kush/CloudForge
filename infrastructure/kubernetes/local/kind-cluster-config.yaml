@@ -1,0 +1,19 @@
+# Disposable local kind cluster configuration for CloudForge Phase 3.6 verification.
+# Note: kind's default CNI (kindnet) does NOT enforce Kubernetes NetworkPolicy rules.
+# To verify real NetworkPolicy enforcement, set disableDefaultCNI: true and install
+# a policy-capable CNI such as Calico or Cilium, or use k3s/k3d with kube-router.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cloudforge-local-dev
+networking:
+  # Uncomment disableDefaultCNI: true when installing Calico/Cilium for NetworkPolicy enforcement tests
+  # disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/16"
+  apiServerAddress: "127.0.0.1"
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+      endpoint = ["http://cloudforge-registry:5000"]
+nodes:
+  - role: control-plane

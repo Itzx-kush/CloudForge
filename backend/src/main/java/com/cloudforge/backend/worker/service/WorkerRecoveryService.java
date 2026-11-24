@@ -1,5 +1,6 @@
 package com.cloudforge.backend.worker.service;
 
+import com.cloudforge.backend.k8s.service.KubernetesDeploymentLifecycleService;
 import com.cloudforge.backend.oci.service.OciBuildLifecycleService;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEntity;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEventEntity;
@@ -50,6 +51,7 @@ public class WorkerRecoveryService {
     private final StageExecutionAttemptRepository attemptRepository;
     private final WorkerResultProcessorService resultProcessorService;
     private final OciBuildLifecycleService ociBuildLifecycleService;
+    private final KubernetesDeploymentLifecycleService k8sLifecycleService;
     private final ObjectMapper objectMapper;
 
     public WorkerRecoveryService(
@@ -61,6 +63,7 @@ public class WorkerRecoveryService {
             StageExecutionAttemptRepository attemptRepository,
             WorkerResultProcessorService resultProcessorService,
             OciBuildLifecycleService ociBuildLifecycleService,
+            KubernetesDeploymentLifecycleService k8sLifecycleService,
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
@@ -71,6 +74,7 @@ public class WorkerRecoveryService {
         this.attemptRepository = attemptRepository;
         this.resultProcessorService = resultProcessorService;
         this.ociBuildLifecycleService = ociBuildLifecycleService;
+        this.k8sLifecycleService = k8sLifecycleService;
         this.objectMapper = objectMapper;
     }
 
@@ -165,6 +169,11 @@ public class WorkerRecoveryService {
         boolean cancelRequested = run.getCancellationRequestedAt() != null
                 || stage.getCancellationRequestedAt() != null;
         ociBuildLifecycleService.reconcileAbortedAttempt(
+                attempt,
+                "Worker lease expired without heartbeat renewal; attempt fenced by recovery service",
+                cancelRequested
+        );
+        k8sLifecycleService.reconcileAbortedAttempt(
                 attempt,
                 "Worker lease expired without heartbeat renewal; attempt fenced by recovery service",
                 cancelRequested

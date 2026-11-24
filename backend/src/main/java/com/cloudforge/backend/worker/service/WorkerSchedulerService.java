@@ -1,6 +1,7 @@
 package com.cloudforge.backend.worker.service;
 
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.k8s.config.KubernetesDeploymentProperties;
 import com.cloudforge.backend.oci.config.OciBuildProperties;
 import com.cloudforge.backend.orchestration.engine.WorkerAssignmentContract;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEntity;
@@ -66,6 +67,7 @@ public class WorkerSchedulerService {
     private final AuditService auditService;
     private final ProjectSourceService sourceService;
     private final OciBuildProperties ociBuildProperties;
+    private final KubernetesDeploymentProperties k8sProperties;
     private final ObjectMapper objectMapper;
 
     public WorkerSchedulerService(
@@ -80,6 +82,7 @@ public class WorkerSchedulerService {
             AuditService auditService,
             ProjectSourceService sourceService,
             OciBuildProperties ociBuildProperties,
+            KubernetesDeploymentProperties k8sProperties,
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
@@ -93,6 +96,7 @@ public class WorkerSchedulerService {
         this.auditService = auditService;
         this.sourceService = sourceService;
         this.ociBuildProperties = ociBuildProperties;
+        this.k8sProperties = k8sProperties;
         this.objectMapper = objectMapper;
     }
 
@@ -143,6 +147,12 @@ public class WorkerSchedulerService {
                     return parsed == null || !parsed.isOciOperation()
                             || (worker.getAdapterType() == WorkerAdapterType.OCI_BUILDKIT
                             && ociBuildProperties.permitsBuildWorker(worker.getWorkerId()));
+                })
+                .filter(op -> {
+                    AllowedWorkerOperation parsed = AllowedWorkerOperation.parseStrict(op).orElse(null);
+                    return parsed == null || !parsed.isKubernetesOperation()
+                            || (worker.getAdapterType() == WorkerAdapterType.KUBERNETES_DEPLOY
+                            && k8sProperties.permitsDeployWorker(worker.getWorkerId()));
                 })
                 .toList();
         if (supportedOperations.isEmpty()) {

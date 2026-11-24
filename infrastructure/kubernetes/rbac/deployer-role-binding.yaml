@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudforge-deployer-binding
+  namespace: cf-example-app-dev
+  labels:
+    app.kubernetes.io/managed-by: cloudforge
+subjects:
+  - kind: ServiceAccount
+    name: cloudforge-deployer
+    namespace: cf-example-app-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudforge-deployer-role

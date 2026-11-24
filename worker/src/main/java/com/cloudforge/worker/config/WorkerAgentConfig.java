@@ -37,13 +37,53 @@ public record WorkerAgentConfig(
         String buildKitAddr,
         boolean allowBuildNetwork,
         boolean allowLocalDevRegistry,
-        Set<String> allowedBaseImages
+        Set<String> allowedBaseImages,
+        boolean kubernetesDeployEnabled,
+        boolean allowLocalDevCluster,
+        long k8sRolloutPollIntervalMs
 ) {
     public static final String SOURCE_OPERATION = "GITHUB_SOURCE_ACQUIRE";
     public static final String OCI_BUILD_OPERATION = "OCI_IMAGE_BUILD";
     public static final String OCI_PUBLISH_OPERATION = "OCI_IMAGE_PUBLISH";
+    public static final String KUBERNETES_DEPLOY_OPERATION = "KUBERNETES_DEPLOY";
     public static final String DEFAULT_EXECUTOR_IMAGE = "alpine:3.20";
-    public static final String AGENT_VERSION = "0.3.5-phase3.5b";
+    public static final String AGENT_VERSION = "0.3.6-phase3.6";
+
+    public WorkerAgentConfig(
+            String controlPlaneBaseUrl,
+            String workerId,
+            String workerToken,
+            String displayName,
+            String hostLabel,
+            String agentVersion,
+            String executorImage,
+            String cpuLimit,
+            String memoryLimit,
+            int pidsLimit,
+            int maxExecutionTimeoutSeconds,
+            long pollIntervalMs,
+            long heartbeatIntervalMs,
+            int maxConcurrency,
+            List<String> supportedOperations,
+            boolean secretDeliveryEnabled,
+            boolean allowInsecureLocalDelivery,
+            boolean ociBuildKitEnabled,
+            String buildKitDriver,
+            String buildKitBuilder,
+            String buildKitAddr,
+            boolean allowBuildNetwork,
+            boolean allowLocalDevRegistry,
+            Set<String> allowedBaseImages
+    ) {
+        this(
+                controlPlaneBaseUrl, workerId, workerToken, displayName, hostLabel, agentVersion,
+                executorImage, cpuLimit, memoryLimit, pidsLimit, maxExecutionTimeoutSeconds,
+                pollIntervalMs, heartbeatIntervalMs, maxConcurrency, supportedOperations,
+                secretDeliveryEnabled, allowInsecureLocalDelivery, ociBuildKitEnabled,
+                buildKitDriver, buildKitBuilder, buildKitAddr, allowBuildNetwork,
+                allowLocalDevRegistry, allowedBaseImages, false, false, 2000L
+        );
+    }
 
     public WorkerAgentConfig(
             String controlPlaneBaseUrl,
@@ -211,6 +251,7 @@ public record WorkerAgentConfig(
         if (supportedOperations.contains(SOURCE_OPERATION)) {
             URI endpoint = URI.create(controlPlaneBaseUrl);
             if (ociBuildKitEnabled
+                    || kubernetesDeployEnabled
                     || !supportedOperations.equals(List.of(SOURCE_OPERATION))
                     || maxConcurrency != 1
                     || !"https".equals(endpoint.getScheme())
@@ -222,7 +263,7 @@ public record WorkerAgentConfig(
         boolean hasOciOp = supportedOperations.contains(OCI_BUILD_OPERATION)
                 || supportedOperations.contains(OCI_PUBLISH_OPERATION);
         if (ociBuildKitEnabled || hasOciOp) {
-            if (!ociBuildKitEnabled || !hasOciOp
+            if (!ociBuildKitEnabled || !hasOciOp || kubernetesDeployEnabled
                     || !supportedOperations.stream().allMatch(op -> op.equals(OCI_BUILD_OPERATION) || op.equals(OCI_PUBLISH_OPERATION))
                     || maxConcurrency > 2) {
                 throw new IllegalArgumentException(
@@ -238,6 +279,21 @@ public record WorkerAgentConfig(
                 );
             }
         }
+        boolean hasK8sOp = supportedOperations.contains(KUBERNETES_DEPLOY_OPERATION);
+        if (kubernetesDeployEnabled || hasK8sOp) {
+            if (!kubernetesDeployEnabled || !supportedOperations.equals(List.of(KUBERNETES_DEPLOY_OPERATION))
+                    || maxConcurrency > 2) {
+                throw new IllegalArgumentException(
+                        "Kubernetes deployment workers must enable CLOUDFORGE_WORKER_KUBERNETES_DEPLOY_ENABLED=true, advertise only KUBERNETES_DEPLOY, and keep maxConcurrency <= 2"
+                );
+            }
+            if (!isHttpsOrAllowedLoopback(controlPlaneBaseUrl, allowInsecureLocalDelivery)) {
+                throw new IllegalArgumentException(
+                        "Kubernetes deployment workers require https:// control plane URL (or loopback with CLOUDFORGE_WORKER_ALLOW_INSECURE_LOCAL_DELIVERY=true)"
+                );
+            }
+        }
+        k8sRolloutPollIntervalMs = Math.max(50L, Math.min(k8sRolloutPollIntervalMs <= 0 ? 2000L : k8sRolloutPollIntervalMs, 10_000L));
     }
 
     public boolean sourceOnly() {
@@ -279,9 +335,11 @@ public record WorkerAgentConfig(
         );
         boolean sourceOnly = Boolean.parseBoolean(env.getOrDefault("CLOUDFORGE_WORKER_SOURCE_ONLY", "false"));
         boolean ociBuildKit = Boolean.parseBoolean(env.getOrDefault("CLOUDFORGE_WORKER_OCI_BUILDKIT_ENABLED", "false"));
-        if (sourceOnly && ociBuildKit) {
+        boolean k8sDeploy = Boolean.parseBoolean(env.getOrDefault("CLOUDFORGE_WORKER_KUBERNETES_DEPLOY_ENABLED", "false"));
+        int enabledModes = (sourceOnly ? 1 : 0) + (ociBuildKit ? 1 : 0) + (k8sDeploy ? 1 : 0);
+        if (enabledModes > 1) {
             throw new IllegalArgumentException(
-                    "CLOUDFORGE_WORKER_SOURCE_ONLY and CLOUDFORGE_WORKER_OCI_BUILDKIT_ENABLED are mutually exclusive"
+                    "CLOUDFORGE_WORKER_SOURCE_ONLY, CLOUDFORGE_WORKER_OCI_BUILDKIT_ENABLED, and CLOUDFORGE_WORKER_KUBERNETES_DEPLOY_ENABLED are mutually exclusive"
             );
         }
 
@@ -293,11 +351,17 @@ public record WorkerAgentConfig(
                 env.getOrDefault("CLOUDFORGE_OCI_ALLOW_LOCAL_DEV_REGISTRY_WORKER", "false")
         );
         Set<String> allowedBaseImages = parseCsvSet(env.getOrDefault("CLOUDFORGE_OCI_ALLOWED_BASE_IMAGES", ""));
+        boolean allowLocalDevCluster = Boolean.parseBoolean(
+                env.getOrDefault("CLOUDFORGE_K8S_ALLOW_LOCAL_DEV_CLUSTER_WORKER", "false")
+        );
+        long k8sPollMs = parseLong(env.get("CLOUDFORGE_K8S_ROLLOUT_POLL_INTERVAL_MS"), 2000L);
 
         List<String> ops = sourceOnly
                 ? List.of(SOURCE_OPERATION)
                 : ociBuildKit
                 ? List.of(OCI_BUILD_OPERATION, OCI_PUBLISH_OPERATION)
+                : k8sDeploy
+                ? List.of(KUBERNETES_DEPLOY_OPERATION)
                 : List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST", "WORKER_DIAGNOSTICS");
 
         return new WorkerAgentConfig(
@@ -324,7 +388,10 @@ public record WorkerAgentConfig(
                 buildKitAddr,
                 allowBuildNetwork,
                 allowLocalDevRegistry,
-                allowedBaseImages
+                allowedBaseImages,
+                k8sDeploy,
+                allowLocalDevCluster,
+                k8sPollMs
         );
     }
 

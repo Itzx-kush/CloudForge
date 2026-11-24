@@ -25,7 +25,7 @@ class FlywayMigrationTest {
     @Test
     void appliesAllMigrationsAndCreatesExpectedTables() {
         MigrationInfo[] applied = flyway.info().applied();
-        assertThat(applied).hasSizeGreaterThanOrEqualTo(8);
+        assertThat(applied).hasSizeGreaterThanOrEqualTo(9);
 
         List<String> expectedTables = List.of(
                 "users",
@@ -58,7 +58,12 @@ class FlywayMigrationTest {
                 "oci_build_records",
                 "oci_image_artifacts",
                 "oci_publish_attempts",
-                "oci_artifact_events"
+                "oci_artifact_events",
+                "kubernetes_cluster_connections",
+                "kubernetes_namespace_bindings",
+                "kubernetes_deployment_configs",
+                "kubernetes_deployment_operations",
+                "kubernetes_deployment_events"
         );
 
         for (String table : expectedTables) {
