@@ -358,6 +358,19 @@ export type PipelineStageStatus =
 
 export type PipelineTriggerType = 'MANUAL' | 'API' | 'SCHEDULE' | 'WEBHOOK';
 
+export interface StageSecretBindingInput {
+  secretId: string;
+  deliveryAlias: string;
+}
+
+export interface StageSecretBinding {
+  secretId: string;
+  secretName: string;
+  deliveryAlias: string;
+  environmentId: string;
+  pinnedVersionNumber?: number | null;
+}
+
 export interface StageDefinitionInput {
   stageKey: string;
   displayName: string;
@@ -367,6 +380,7 @@ export interface StageDefinitionInput {
   maxRetries?: number;
   allowFailure?: boolean;
   metadata?: Record<string, string>;
+  secretBindings?: StageSecretBindingInput[];
 }
 
 export interface CreatePipelineDefinitionInput {
@@ -374,6 +388,7 @@ export interface CreatePipelineDefinitionInput {
   name: string;
   description?: string;
   linkedRepositoryId?: string | null;
+  targetEnvironmentId?: string | null;
   enabled?: boolean;
   stages: StageDefinitionInput[];
 }
@@ -382,6 +397,7 @@ export interface UpdatePipelineDefinitionInput {
   name: string;
   description?: string;
   linkedRepositoryId?: string | null;
+  targetEnvironmentId?: string | null;
   enabled?: boolean;
   expectedRowVersion?: number | null;
   stages: StageDefinitionInput[];
@@ -398,6 +414,7 @@ export interface PipelineStageDefinition {
   maxRetries: number;
   allowFailure: boolean;
   metadata: Record<string, string>;
+  secretBindings?: StageSecretBinding[];
 }
 
 export interface PipelineDefinition {
@@ -407,6 +424,10 @@ export interface PipelineDefinition {
   projectName: string;
   linkedRepositoryId: string | null;
   repositoryFullName: string | null;
+  targetEnvironmentId?: string | null;
+  targetEnvironmentName?: string | null;
+  targetEnvironmentType?: EnvironmentType | null;
+  hasSecretBindings?: boolean;
   name: string;
   slug: string;
   description: string | null;
@@ -444,6 +465,8 @@ export interface PipelineStageRun {
   allowedOperation?: string | null;
   executionSupported?: boolean;
   capabilityMessage?: string | null;
+  hasSecretBindings?: boolean;
+  secretBindings?: StageSecretBinding[];
   assignedWorkerId?: string | null;
   leaseExpiresAt?: string | null;
   nextRetryAt?: string | null;
@@ -463,6 +486,10 @@ export interface PipelineRun {
   definitionVersion: number;
   linkedRepositoryId: string | null;
   repositoryFullName: string | null;
+  targetEnvironmentId?: string | null;
+  targetEnvironmentName?: string | null;
+  targetEnvironmentType?: EnvironmentType | null;
+  hasSecretBindings?: boolean;
   runNumber: number;
   triggerType: PipelineTriggerType;
   targetBranch: string | null;
@@ -593,4 +620,84 @@ export interface StageExecutionLog {
   message: string;
   truncated: boolean;
   occurredAt: string;
+}
+
+// --- Phase 3.4: Encrypted Environment Secrets & Pipeline Bindings ---
+
+export type SecretLifecycleStatus = 'ACTIVE' | 'REVOKED' | 'DELETED';
+
+export type SecretVersionStatus = 'ACTIVE' | 'REVOKED';
+
+export interface SecretSubsystemStatus {
+  enabled: boolean;
+  available: boolean;
+  providerType: string;
+  activeKeyId: string | null;
+  workerDeliveryEnabled: boolean;
+  allowInsecureLocalDelivery: boolean;
+  operatorRotationEnabled: boolean;
+  maxSecretValueBytes: number;
+  maxSecretsPerEnvironment: number;
+  maxBindingsPerPipeline: number;
+  statusDiagnostic: string;
+}
+
+export interface EnvironmentSecretSummary {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  environmentId: string;
+  environmentName: string;
+  environmentType: EnvironmentType;
+  name: string;
+  description: string | null;
+  status: SecretLifecycleStatus;
+  currentVersionNumber: number;
+  currentVersionId: string | null;
+  currentKekId: string | null;
+  encryptionAlgorithm: string;
+  encryptionFormatVersion: number;
+  createdByUsername: string | null;
+  updatedByUsername: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastRotatedAt: string | null;
+  revokedAt: string | null;
+  revokedByUsername: string | null;
+}
+
+export interface EnvironmentSecretVersion {
+  id: string;
+  secretId: string;
+  versionNumber: number;
+  status: SecretVersionStatus;
+  kekId: string;
+  encryptionAlgorithm: string;
+  encryptionFormatVersion: number;
+  createdByUsername: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  revokedByUsername: string | null;
+  current: boolean;
+}
+
+export interface EnvironmentSecretDetail {
+  secret: EnvironmentSecretSummary;
+  versions: EnvironmentSecretVersion[];
+}
+
+export interface CreateEnvironmentSecretInput {
+  name: string;
+  value: string;
+  description?: string;
+}
+
+export interface RotateEnvironmentSecretInput {
+  value: string;
+  description?: string;
+}
+
+export interface RevokeEnvironmentSecretInput {
+  versionNumber?: number;
+  reason?: string;
 }

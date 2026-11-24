@@ -1,6 +1,8 @@
 package com.cloudforge.backend.orchestration.dto;
 
 import com.cloudforge.backend.orchestration.entity.PipelineStageType;
+import com.cloudforge.backend.secrets.dto.StageSecretBindingInput;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -34,6 +36,21 @@ public record StageDefinitionRequest(
 
         Boolean allowFailure,
 
-        Map<String, String> metadata
+        Map<String, String> metadata,
+
+        @Valid
+        List<StageSecretBindingInput> secretBindings
 ) {
+    public StageDefinitionRequest(
+            String stageKey,
+            String displayName,
+            PipelineStageType stageType,
+            List<String> dependsOn,
+            Integer timeoutSeconds,
+            Integer maxRetries,
+            Boolean allowFailure,
+            Map<String, String> metadata
+    ) {
+        this(stageKey, displayName, stageType, dependsOn, timeoutSeconds, maxRetries, allowFailure, metadata, List.of());
+    }
 }

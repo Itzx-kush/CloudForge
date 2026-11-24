@@ -3,6 +3,7 @@ package com.cloudforge.backend.exception;
 import com.cloudforge.backend.config.RequestCorrelationFilter;
 import com.cloudforge.backend.dto.ApiErrorResponse;
 import com.cloudforge.backend.github.GitHubRateLimitException;
+import com.cloudforge.backend.secrets.crypto.SecretCryptoException;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -179,6 +180,25 @@ public class GlobalExceptionHandler {
         return buildResponse(
                 HttpStatus.CONFLICT,
                 "Concurrent modification detected. Reload the latest resource state and retry.",
+                request.getRequestURI(),
+                Map.of()
+        );
+    }
+
+    @ExceptionHandler(SecretCryptoException.class)
+    public ResponseEntity<ApiErrorResponse> handleSecretCryptoException(
+            SecretCryptoException ex,
+            HttpServletRequest request
+    ) {
+        log.error(
+                "Cryptographic operation failed while processing {} {}: {}",
+                request.getMethod(),
+                request.getRequestURI(),
+                ex.getMessage()
+        );
+        return buildResponse(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Cryptographic operation failed; request aborted safely",
                 request.getRequestURI(),
                 Map.of()
         );

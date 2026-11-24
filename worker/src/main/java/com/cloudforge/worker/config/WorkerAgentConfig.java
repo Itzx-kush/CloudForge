@@ -23,10 +23,50 @@ public record WorkerAgentConfig(
         long pollIntervalMs,
         long heartbeatIntervalMs,
         int maxConcurrency,
-        List<String> supportedOperations
+        List<String> supportedOperations,
+        boolean secretDeliveryEnabled,
+        boolean allowInsecureLocalDelivery
 ) {
     public static final String DEFAULT_EXECUTOR_IMAGE = "alpine:3.20";
-    public static final String AGENT_VERSION = "0.3.3-phase3.3";
+    public static final String AGENT_VERSION = "0.3.4-phase3.4";
+
+    public WorkerAgentConfig(
+            String controlPlaneBaseUrl,
+            String workerId,
+            String workerToken,
+            String displayName,
+            String hostLabel,
+            String agentVersion,
+            String executorImage,
+            String cpuLimit,
+            String memoryLimit,
+            int pidsLimit,
+            int maxExecutionTimeoutSeconds,
+            long pollIntervalMs,
+            long heartbeatIntervalMs,
+            int maxConcurrency,
+            List<String> supportedOperations
+    ) {
+        this(
+                controlPlaneBaseUrl,
+                workerId,
+                workerToken,
+                displayName,
+                hostLabel,
+                agentVersion,
+                executorImage,
+                cpuLimit,
+                memoryLimit,
+                pidsLimit,
+                maxExecutionTimeoutSeconds,
+                pollIntervalMs,
+                heartbeatIntervalMs,
+                maxConcurrency,
+                supportedOperations,
+                false,
+                false
+        );
+    }
 
     /**
      * Strict allowlist for trusted fixed executor images (supports pinned sha256 digests).
@@ -87,7 +127,26 @@ public record WorkerAgentConfig(
         if (maxConcurrency < 1 || maxConcurrency > 4) {
             throw new IllegalArgumentException("CLOUDFORGE_MAX_CONCURRENCY must be between 1 and 4");
         }
+        if (secretDeliveryEnabled && !isHttpsOrAllowedLoopback(controlPlaneBaseUrl, allowInsecureLocalDelivery)) {
+            throw new IllegalArgumentException(
+                    "CLOUDFORGE_CONTROL_PLANE_URL must use https:// when worker secret delivery is enabled "
+                            + "(or set CLOUDFORGE_WORKER_ALLOW_INSECURE_LOCAL_DELIVERY=true for loopback development only)"
+            );
+        }
         supportedOperations = List.copyOf(supportedOperations);
+    }
+
+    private static boolean isHttpsOrAllowedLoopback(String baseUrl, boolean allowInsecureLocal) {
+        String lower = baseUrl.toLowerCase();
+        if (lower.startsWith("https://")) {
+            return true;
+        }
+        if (!allowInsecureLocal) {
+            return false;
+        }
+        return lower.startsWith("http://127.0.0.1")
+                || lower.startsWith("http://localhost")
+                || lower.startsWith("http://[::1]");
     }
 
     public static WorkerAgentConfig fromEnv(Map<String, String> env) {
@@ -104,6 +163,12 @@ public record WorkerAgentConfig(
         long pollMs = parseLong(env.get("CLOUDFORGE_POLL_INTERVAL_MS"), 2000L);
         long hbMs = parseLong(env.get("CLOUDFORGE_HEARTBEAT_INTERVAL_MS"), 5000L);
         int concurrency = parseInt(env.get("CLOUDFORGE_MAX_CONCURRENCY"), 1);
+        boolean secretDeliveryEnabled = Boolean.parseBoolean(
+                env.getOrDefault("CLOUDFORGE_WORKER_SECRET_DELIVERY_ENABLED", "false")
+        );
+        boolean allowInsecureLocalDelivery = Boolean.parseBoolean(
+                env.getOrDefault("CLOUDFORGE_WORKER_ALLOW_INSECURE_LOCAL_DELIVERY", "false")
+        );
 
         return new WorkerAgentConfig(
                 baseUrl,
@@ -120,7 +185,9 @@ public record WorkerAgentConfig(
                 pollMs,
                 hbMs,
                 concurrency,
-                List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST", "WORKER_DIAGNOSTICS")
+                List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST", "WORKER_DIAGNOSTICS"),
+                secretDeliveryEnabled,
+                allowInsecureLocalDelivery
         );
     }
 

@@ -3,6 +3,7 @@ package com.cloudforge.backend.orchestration.service;
 import com.cloudforge.backend.dto.PagedResponse;
 import com.cloudforge.backend.entity.LinkedRepositoryEntity;
 import com.cloudforge.backend.entity.ProjectEntity;
+import com.cloudforge.backend.entity.ProjectEnvironmentEntity;
 import com.cloudforge.backend.entity.UserEntity;
 import com.cloudforge.backend.entity.WorkspaceEntity;
 import com.cloudforge.backend.entity.WorkspaceMemberEntity;
@@ -20,10 +21,20 @@ import com.cloudforge.backend.orchestration.entity.PipelineStageDefinitionEntity
 import com.cloudforge.backend.orchestration.repository.PipelineDefinitionRepository;
 import com.cloudforge.backend.orchestration.repository.PipelineStageDefinitionRepository;
 import com.cloudforge.backend.repository.LinkedRepositoryRepository;
+import com.cloudforge.backend.repository.ProjectEnvironmentRepository;
 import com.cloudforge.backend.repository.ProjectRepository;
+import com.cloudforge.backend.secrets.config.SecretManagementProperties;
+import com.cloudforge.backend.secrets.dto.StageSecretBindingDto;
+import com.cloudforge.backend.secrets.dto.StageSecretBindingInput;
+import com.cloudforge.backend.secrets.entity.EnvironmentSecretEntity;
+import com.cloudforge.backend.secrets.entity.SecretLifecycleStatus;
+import com.cloudforge.backend.secrets.repository.EnvironmentSecretRepository;
+import com.cloudforge.backend.secrets.service.SecretAuditService;
+import com.cloudforge.backend.secrets.service.SecretManagementService;
 import com.cloudforge.backend.service.AuditService;
 import com.cloudforge.backend.service.SlugUtils;
 import com.cloudforge.backend.service.WorkspaceAuthorizationService;
+import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,15 +46,26 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class PipelineDefinitionService {
 
     private final WorkspaceAuthorizationService authorizationService;
     private final ProjectRepository projectRepository;
+    private final ProjectEnvironmentRepository environmentRepository;
+    private final EnvironmentSecretRepository secretRepository;
+    private final SecretManagementProperties secretManagementProperties;
+    private final SecretManagementService secretManagementService;
+    private final SecretAuditService secretAuditService;
     private final LinkedRepositoryRepository linkedRepositoryRepository;
     private final PipelineDefinitionRepository definitionRepository;
     private final PipelineStageDefinitionRepository stageDefinitionRepository;
@@ -54,6 +76,11 @@ public class PipelineDefinitionService {
     public PipelineDefinitionService(
             WorkspaceAuthorizationService authorizationService,
             ProjectRepository projectRepository,
+            ProjectEnvironmentRepository environmentRepository,
+            EnvironmentSecretRepository secretRepository,
+            SecretManagementProperties secretManagementProperties,
+            SecretManagementService secretManagementService,
+            SecretAuditService secretAuditService,
             LinkedRepositoryRepository linkedRepositoryRepository,
             PipelineDefinitionRepository definitionRepository,
             PipelineStageDefinitionRepository stageDefinitionRepository,
@@ -63,6 +90,11 @@ public class PipelineDefinitionService {
     ) {
         this.authorizationService = authorizationService;
         this.projectRepository = projectRepository;
+        this.environmentRepository = environmentRepository;
+        this.secretRepository = secretRepository;
+        this.secretManagementProperties = secretManagementProperties;
+        this.secretManagementService = secretManagementService;
+        this.secretAuditService = secretAuditService;
         this.linkedRepositoryRepository = linkedRepositoryRepository;
         this.definitionRepository = definitionRepository;
         this.stageDefinitionRepository = stageDefinitionRepository;
@@ -122,7 +154,16 @@ public class PipelineDefinitionService {
                 .orElseThrow(() -> new ResourceNotFoundException("Project not found in this workspace"));
 
         LinkedRepositoryEntity repository = resolveRepository(workspaceId, request.linkedRepositoryId(), project);
+        ProjectEnvironmentEntity targetEnvironment = resolveTargetEnvironment(project.getId(), request.targetEnvironmentId());
         StageDagValidator.ValidatedStageGraph validatedGraph = validateStageRequests(request.stages());
+        Map<String, List<StageSecretBindingDto>> resolvedBindingsByStage = validateAndResolveSecretBindings(
+                workspaceId,
+                project,
+                targetEnvironment,
+                request.stages(),
+                validatedGraph,
+                user
+        );
 
         String name = request.name().trim();
         String slug = resolveUniqueSlug(project.getId(), name, null);
@@ -131,6 +172,7 @@ public class PipelineDefinitionService {
         definition.setWorkspace(workspace);
         definition.setProject(project);
         definition.setLinkedRepository(repository);
+        definition.setTargetEnvironment(targetEnvironment);
         definition.setName(name);
         definition.setSlug(slug);
         definition.setDescription(trimToNull(request.description()));
@@ -140,7 +182,29 @@ public class PipelineDefinitionService {
         definition.setUpdatedBy(user);
 
         PipelineDefinitionEntity saved = definitionRepository.saveAndFlush(definition);
-        List<PipelineStageDefinitionEntity> savedStages = persistStages(saved, validatedGraph.orderedStages());
+        List<PipelineStageDefinitionEntity> savedStages = persistStages(
+                saved, validatedGraph.orderedStages(), resolvedBindingsByStage
+        );
+
+        int totalBindings = resolvedBindingsByStage.values().stream().mapToInt(List::size).sum();
+        if (totalBindings > 0) {
+            secretAuditService.recordSecretEvent(
+                    workspace,
+                    user,
+                    SecretAuditService.ACTION_SECRET_BINDING_UPDATED,
+                    "PIPELINE_DEFINITION",
+                    saved.getId().toString(),
+                    "Bound " + totalBindings + " secret reference(s) to pipeline \"" + saved.getName() + "\" (env="
+                            + targetEnvironment.getEnvironmentType() + ")",
+                    Map.of(
+                            "projectId", project.getId().toString(),
+                            "environmentId", targetEnvironment.getId().toString(),
+                            "environmentType", targetEnvironment.getEnvironmentType().name(),
+                            "bindingCount", totalBindings,
+                            "definitionVersion", saved.getDefinitionVersion()
+                    )
+            );
+        }
 
         auditService.record(
                 workspace,
@@ -189,8 +253,17 @@ public class PipelineDefinitionService {
                 ? linkedRepositoryRepository.findByIdAndWorkspaceId(request.linkedRepositoryId(), workspaceId)
                 .orElseThrow(() -> new ResourceNotFoundException("Linked repository not found in this workspace"))
                 : null;
+        ProjectEnvironmentEntity targetEnvironment = resolveTargetEnvironment(project.getId(), request.targetEnvironmentId());
 
         StageDagValidator.ValidatedStageGraph validatedGraph = validateStageRequests(request.stages());
+        Map<String, List<StageSecretBindingDto>> resolvedBindingsByStage = validateAndResolveSecretBindings(
+                workspaceId,
+                project,
+                targetEnvironment,
+                request.stages(),
+                validatedGraph,
+                user
+        );
 
         String name = request.name().trim();
         String slug = resolveUniqueSlug(project.getId(), name, definition.getId());
@@ -199,6 +272,7 @@ public class PipelineDefinitionService {
         definition.setSlug(slug);
         definition.setDescription(trimToNull(request.description()));
         definition.setLinkedRepository(repository);
+        definition.setTargetEnvironment(targetEnvironment);
         if (request.enabled() != null) {
             definition.setEnabled(request.enabled());
         }
@@ -211,7 +285,29 @@ public class PipelineDefinitionService {
         PipelineDefinitionEntity reloaded = definitionRepository
                 .findByIdAndWorkspaceIdWithDetails(saved.getId(), workspaceId)
                 .orElseThrow(() -> new ResourceNotFoundException("Pipeline definition not found in this workspace"));
-        List<PipelineStageDefinitionEntity> savedStages = persistStages(reloaded, validatedGraph.orderedStages());
+        List<PipelineStageDefinitionEntity> savedStages = persistStages(
+                reloaded, validatedGraph.orderedStages(), resolvedBindingsByStage
+        );
+
+        int totalBindings = resolvedBindingsByStage.values().stream().mapToInt(List::size).sum();
+        if (totalBindings > 0) {
+            secretAuditService.recordSecretEvent(
+                    workspace,
+                    user,
+                    SecretAuditService.ACTION_SECRET_BINDING_UPDATED,
+                    "PIPELINE_DEFINITION",
+                    reloaded.getId().toString(),
+                    "Updated secret references (" + totalBindings + " binding(s)) on pipeline \"" + reloaded.getName()
+                            + "\" v" + reloaded.getDefinitionVersion(),
+                    Map.of(
+                            "projectId", project.getId().toString(),
+                            "environmentId", targetEnvironment.getId().toString(),
+                            "environmentType", targetEnvironment.getEnvironmentType().name(),
+                            "bindingCount", totalBindings,
+                            "definitionVersion", reloaded.getDefinitionVersion()
+                    )
+            );
+        }
 
         auditService.record(
                 workspace,
@@ -261,7 +357,8 @@ public class PipelineDefinitionService {
 
     private List<PipelineStageDefinitionEntity> persistStages(
             PipelineDefinitionEntity definition,
-            List<StageDagValidator.ValidatedStageSpec> orderedStages
+            List<StageDagValidator.ValidatedStageSpec> orderedStages,
+            Map<String, List<StageSecretBindingDto>> resolvedBindingsByStage
     ) {
         List<PipelineStageDefinitionEntity> result = new ArrayList<>(orderedStages.size());
         for (StageDagValidator.ValidatedStageSpec spec : orderedStages) {
@@ -276,10 +373,126 @@ public class PipelineDefinitionService {
             entity.setMaxRetries(spec.maxRetries());
             entity.setAllowFailure(spec.allowFailure());
             entity.setMetadataJson(writeJson(spec.metadata()));
+            List<StageSecretBindingDto> stageBindings = resolvedBindingsByStage.getOrDefault(spec.stageKey(), List.of());
+            entity.setSecretBindingsJson(writeJson(stageBindings));
             result.add(stageDefinitionRepository.save(entity));
         }
         stageDefinitionRepository.flush();
         return result;
+    }
+
+    private ProjectEnvironmentEntity resolveTargetEnvironment(UUID projectId, UUID targetEnvironmentId) {
+        if (targetEnvironmentId == null) {
+            return null;
+        }
+        return environmentRepository.findByIdAndProjectId(targetEnvironmentId, projectId)
+                .orElseThrow(() -> new BadRequestException(
+                        "Target environment does not belong to the selected pipeline project"
+                ));
+    }
+
+    private Map<String, List<StageSecretBindingDto>> validateAndResolveSecretBindings(
+            UUID workspaceId,
+            ProjectEntity project,
+            ProjectEnvironmentEntity targetEnvironment,
+            List<StageDefinitionRequest> requests,
+            StageDagValidator.ValidatedStageGraph validatedGraph,
+            UserEntity user
+    ) {
+        Map<String, List<StageSecretBindingInput>> inputsByStageKey = new LinkedHashMap<>();
+        int totalBindings = 0;
+        for (StageDefinitionRequest req : requests) {
+            if (req.secretBindings() != null && !req.secretBindings().isEmpty()) {
+                String normalizedKey = req.stageKey().trim();
+                inputsByStageKey.put(normalizedKey, req.secretBindings());
+                totalBindings += req.secretBindings().size();
+            }
+        }
+        if (totalBindings == 0) {
+            return Map.of();
+        }
+
+        authorizationService.requireSecretBindingManagementAccess(workspaceId, user.getId());
+
+        if (totalBindings > secretManagementProperties.getMaxBindingsPerPipeline()) {
+            throw new BadRequestException(
+                    "Pipeline cannot exceed " + secretManagementProperties.getMaxBindingsPerPipeline()
+                            + " secret bindings across all stages"
+            );
+        }
+        if (targetEnvironment == null) {
+            throw new BadRequestException(
+                    "A project targetEnvironmentId is required when binding encrypted secrets to pipeline stages"
+            );
+        }
+
+        Map<String, StageDagValidator.ValidatedStageSpec> validatedByKey = validatedGraph.orderedStages().stream()
+                .collect(Collectors.toMap(StageDagValidator.ValidatedStageSpec::stageKey, Function.identity()));
+
+        Set<UUID> requestedSecretIds = new HashSet<>();
+        for (Map.Entry<String, List<StageSecretBindingInput>> entry : inputsByStageKey.entrySet()) {
+            StageDagValidator.ValidatedStageSpec stageSpec = validatedByKey.get(entry.getKey());
+            if (stageSpec == null) {
+                continue;
+            }
+            Optional<AllowedWorkerOperation> operation = AllowedWorkerOperation.resolveForStage(
+                    stageSpec.stageType(), stageSpec.metadata()
+            );
+            if (operation.isEmpty()) {
+                throw new BadRequestException(
+                        "Stage \"" + stageSpec.stageKey() + "\" (" + stageSpec.stageType()
+                                + ") cannot bind encrypted secrets without an approved Phase 3.4 worker operation"
+                );
+            }
+            for (StageSecretBindingInput binding : entry.getValue()) {
+                requestedSecretIds.add(binding.secretId());
+            }
+        }
+
+        Map<UUID, EnvironmentSecretEntity> scopedSecrets = secretRepository
+                .findAllByIdInAndWorkspaceIdAndProjectIdAndEnvironmentId(
+                        requestedSecretIds, workspaceId, project.getId(), targetEnvironment.getId()
+                )
+                .stream()
+                .collect(Collectors.toMap(EnvironmentSecretEntity::getId, Function.identity()));
+
+        Map<String, List<StageSecretBindingDto>> resolved = new LinkedHashMap<>();
+        for (Map.Entry<String, List<StageSecretBindingInput>> entry : inputsByStageKey.entrySet()) {
+            String stageKey = entry.getKey();
+            Set<String> seenAliases = new HashSet<>();
+            Set<UUID> seenSecrets = new HashSet<>();
+            List<StageSecretBindingDto> resolvedStageBindings = new ArrayList<>();
+
+            for (StageSecretBindingInput binding : entry.getValue()) {
+                String validatedAlias = secretManagementService.validateSecretName(binding.deliveryAlias());
+                if (!seenAliases.add(validatedAlias)) {
+                    throw new BadRequestException(
+                            "Duplicate secret delivery alias \"" + validatedAlias + "\" in stage \"" + stageKey + "\""
+                    );
+                }
+                if (!seenSecrets.add(binding.secretId())) {
+                    throw new BadRequestException(
+                            "Secret " + binding.secretId() + " is bound more than once on stage \"" + stageKey + "\""
+                    );
+                }
+                EnvironmentSecretEntity secret = scopedSecrets.get(binding.secretId());
+                if (secret == null || secret.getStatus() != SecretLifecycleStatus.ACTIVE) {
+                    throw new BadRequestException(
+                            "Referenced secret " + binding.secretId() + " must be ACTIVE within project environment \""
+                                    + targetEnvironment.getName() + "\""
+                    );
+                }
+                resolvedStageBindings.add(new StageSecretBindingDto(
+                        secret.getId(),
+                        secret.getSecretName(),
+                        validatedAlias,
+                        targetEnvironment.getId(),
+                        null
+                ));
+            }
+            resolved.put(stageKey, resolvedStageBindings);
+        }
+        return resolved;
     }
 
     private String resolveUniqueSlug(UUID projectId, String name, UUID excludeId) {
@@ -316,6 +529,8 @@ public class PipelineDefinitionService {
         List<PipelineStageDefinitionDto> stageDtos = stages.stream()
                 .map(this::toStageDto)
                 .toList();
+        boolean hasSecretBindings = stageDtos.stream()
+                .anyMatch(s -> s.secretBindings() != null && !s.secretBindings().isEmpty());
         return new PipelineDefinitionDto(
                 entity.getId(),
                 entity.getWorkspace().getId(),
@@ -323,6 +538,10 @@ public class PipelineDefinitionService {
                 entity.getProject().getName(),
                 entity.getLinkedRepository() != null ? entity.getLinkedRepository().getId() : null,
                 entity.getLinkedRepository() != null ? entity.getLinkedRepository().getFullName() : null,
+                entity.getTargetEnvironment() != null ? entity.getTargetEnvironment().getId() : null,
+                entity.getTargetEnvironment() != null ? entity.getTargetEnvironment().getName() : null,
+                entity.getTargetEnvironment() != null ? entity.getTargetEnvironment().getEnvironmentType() : null,
+                hasSecretBindings,
                 entity.getName(),
                 entity.getSlug(),
                 entity.getDescription(),
@@ -348,8 +567,21 @@ public class PipelineDefinitionService {
                 stage.getTimeoutSeconds(),
                 stage.getMaxRetries(),
                 stage.isAllowFailure(),
-                readStringMap(stage.getMetadataJson())
+                readStringMap(stage.getMetadataJson()),
+                readSecretBindings(stage.getSecretBindingsJson())
         );
+    }
+
+    public List<StageSecretBindingDto> readSecretBindings(String json) {
+        if (!StringUtils.hasText(json)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {
+            });
+        } catch (JsonProcessingException ex) {
+            return List.of();
+        }
     }
 
     private String writeJson(Object value) {

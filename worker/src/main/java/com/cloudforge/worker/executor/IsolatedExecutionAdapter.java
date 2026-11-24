@@ -35,8 +35,41 @@ public interface IsolatedExecutionAdapter {
             int attemptNumber,
             int timeoutSeconds,
             int maxLogLines,
-            int maxLogBytes
+            int maxLogBytes,
+            Map<String, String> ephemeralSecrets
     ) {
+        public ExecutionRequest(
+                UUID attemptId,
+                UUID pipelineRunId,
+                UUID stageRunId,
+                String stageKey,
+                String allowedOperation,
+                int attemptNumber,
+                int timeoutSeconds,
+                int maxLogLines,
+                int maxLogBytes
+        ) {
+            this(
+                    attemptId,
+                    pipelineRunId,
+                    stageRunId,
+                    stageKey,
+                    allowedOperation,
+                    attemptNumber,
+                    timeoutSeconds,
+                    maxLogLines,
+                    maxLogBytes,
+                    Map.of()
+            );
+        }
+
+        @Override
+        public String toString() {
+            return "ExecutionRequest[attemptId=" + attemptId
+                    + ", stageKey=" + stageKey
+                    + ", allowedOperation=" + allowedOperation
+                    + ", secretCount=" + (ephemeralSecrets == null ? 0 : ephemeralSecrets.size()) + "]";
+        }
     }
 
     record ExecutionResult(

@@ -35,6 +35,7 @@ public interface PipelineDefinitionRepository
             if (query != null && query.getResultType() != Long.class && query.getResultType() != long.class) {
                 root.fetch("project", JoinType.INNER);
                 root.fetch("linkedRepository", JoinType.LEFT);
+                root.fetch("targetEnvironment", JoinType.LEFT);
                 root.fetch("createdBy", JoinType.LEFT);
             }
 
@@ -70,6 +71,7 @@ public interface PipelineDefinitionRepository
             JOIN FETCH d.workspace w
             JOIN FETCH d.project p
             LEFT JOIN FETCH d.linkedRepository lr
+            LEFT JOIN FETCH d.targetEnvironment te
             LEFT JOIN FETCH d.createdBy cb
             LEFT JOIN FETCH d.updatedBy ub
             WHERE d.id = :id AND d.workspace.id = :workspaceId

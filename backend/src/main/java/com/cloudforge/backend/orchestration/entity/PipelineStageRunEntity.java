@@ -54,6 +54,12 @@ public class PipelineStageRunEntity extends BaseAuditableEntity {
     @Column(name = "allowed_operation", length = 64)
     private String allowedOperation;
 
+    @Column(name = "secret_bindings_json", nullable = false, columnDefinition = "TEXT")
+    private String secretBindingsJson = "[]";
+
+    @Column(name = "has_secret_bindings", nullable = false)
+    private boolean hasSecretBindings = false;
+
     @Column(name = "timeout_seconds", nullable = false)
     private int timeoutSeconds = 600;
 
@@ -326,6 +332,22 @@ public class PipelineStageRunEntity extends BaseAuditableEntity {
 
     public Long getRowVersion() {
         return rowVersion;
+    }
+
+    public String getSecretBindingsJson() {
+        return secretBindingsJson;
+    }
+
+    public void setSecretBindingsJson(String secretBindingsJson) {
+        this.secretBindingsJson = secretBindingsJson;
+    }
+
+    public boolean isHasSecretBindings() {
+        return hasSecretBindings;
+    }
+
+    public void setHasSecretBindings(boolean hasSecretBindings) {
+        this.hasSecretBindings = hasSecretBindings;
     }
 
     private static String truncate(String value, int max) {

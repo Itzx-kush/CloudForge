@@ -50,7 +50,9 @@ public interface WorkerAssignmentContract {
     }
 
     /**
-     * Phase 3.3 fenced lease ticket handed to an authenticated trusted worker upon atomic claim.
+     * Phase 3.3 / 3.4 fenced lease ticket handed to an authenticated trusted worker upon atomic claim.
+     * Deliberately excludes plaintext secrets; workers holding active leases must fetch secrets
+     * separately through the lease-bound internal delivery endpoint when {@code hasSecretBindings} is true.
      */
     record LeasedStageWork(
             StageDispatchDescriptor stage,
@@ -64,8 +66,41 @@ public interface WorkerAssignmentContract {
             Instant leaseExpiresAt,
             int heartbeatIntervalSeconds,
             int maxLogLines,
-            int maxLogBytes
+            int maxLogBytes,
+            boolean hasSecretBindings,
+            List<String> secretAliases
     ) {
+        public LeasedStageWork(
+                StageDispatchDescriptor stage,
+                UUID attemptId,
+                String workerId,
+                String leaseToken,
+                long fencingGeneration,
+                String allowedOperation,
+                boolean idempotentOperation,
+                Instant leaseStartedAt,
+                Instant leaseExpiresAt,
+                int heartbeatIntervalSeconds,
+                int maxLogLines,
+                int maxLogBytes
+        ) {
+            this(
+                    stage,
+                    attemptId,
+                    workerId,
+                    leaseToken,
+                    fencingGeneration,
+                    allowedOperation,
+                    idempotentOperation,
+                    leaseStartedAt,
+                    leaseExpiresAt,
+                    heartbeatIntervalSeconds,
+                    maxLogLines,
+                    maxLogBytes,
+                    false,
+                    List.of()
+            );
+        }
     }
 
     /**

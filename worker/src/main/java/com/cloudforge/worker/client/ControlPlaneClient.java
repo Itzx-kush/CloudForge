@@ -20,6 +20,15 @@ public interface ControlPlaneClient {
 
     void acknowledgeRunning(String workerId, UUID attemptId, String leaseToken, long fencingGeneration, Instant startedAt);
 
+    default SecretDeliveryResult fetchAttemptSecrets(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        throw new UnsupportedOperationException("Worker secret delivery is not supported by this client");
+    }
+
     void appendLogs(String workerId, UUID attemptId, String leaseToken, long fencingGeneration, List<LogEntry> entries);
 
     void completeAttempt(String workerId, UUID attemptId, CompletionPayload payload);
@@ -85,8 +94,71 @@ public interface ControlPlaneClient {
             Instant leaseExpiresAt,
             int heartbeatIntervalSeconds,
             int maxLogLines,
-            int maxLogBytes
+            int maxLogBytes,
+            boolean hasSecretBindings,
+            List<String> secretAliases
     ) {
+        public ClaimedStageLease(
+                StageInfo stage,
+                UUID attemptId,
+                String workerId,
+                String leaseToken,
+                long fencingGeneration,
+                String allowedOperation,
+                boolean idempotentOperation,
+                Instant leaseStartedAt,
+                Instant leaseExpiresAt,
+                int heartbeatIntervalSeconds,
+                int maxLogLines,
+                int maxLogBytes
+        ) {
+            this(
+                    stage,
+                    attemptId,
+                    workerId,
+                    leaseToken,
+                    fencingGeneration,
+                    allowedOperation,
+                    idempotentOperation,
+                    leaseStartedAt,
+                    leaseExpiresAt,
+                    heartbeatIntervalSeconds,
+                    maxLogLines,
+                    maxLogBytes,
+                    false,
+                    List.of()
+            );
+        }
+    }
+
+    record DeliveredSecret(
+            String alias,
+            String secretName,
+            UUID secretId,
+            UUID secretVersionId,
+            int versionNumber,
+            String value
+    ) {
+        @Override
+        public String toString() {
+            return "DeliveredSecret[alias=" + alias + ", secretId=" + secretId
+                    + ", versionNumber=" + versionNumber + ", value=[REDACTED]]";
+        }
+    }
+
+    record SecretDeliveryResult(
+            UUID attemptId,
+            UUID pipelineRunId,
+            UUID stageRunId,
+            long fencingGeneration,
+            Instant deliveredAt,
+            List<DeliveredSecret> secrets
+    ) {
+        @Override
+        public String toString() {
+            return "SecretDeliveryResult[attemptId=" + attemptId
+                    + ", count=" + (secrets == null ? 0 : secrets.size()) + ", secrets=[REDACTED]]";
+        }
     }
 
     record LogEntry(String streamType, String message, Instant occurredAt) {

@@ -412,6 +412,38 @@
   flex: 1;
 }
 
+.cf-secret-binding-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cf-secret-binding-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.cf-secret-ref-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-accent);
+  background: var(--accent-soft);
+  color: var(--accent-primary);
+}
+
+@media (max-width: 700px) {
+  .cf-secret-binding-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 700px) {
   .cf-stage-editor-grid,
   .cf-stage-editor-grid--3 {

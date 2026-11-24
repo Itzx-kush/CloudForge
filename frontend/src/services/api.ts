@@ -4,9 +4,13 @@ import type {
   AuditEvent,
   AuthConfig,
   AuthMePayload,
+  CreateEnvironmentSecretInput,
   CreatePipelineDefinitionInput,
   CreatePipelineRunInput,
   CreateProjectInput,
+  EnvironmentSecretDetail,
+  EnvironmentSecretSummary,
+  EnvironmentSecretVersion,
   GitHubActionsSyncResponse,
   GitHubInstallUrlResponse,
   GitHubInstallationsResponse,
@@ -25,6 +29,10 @@ import type {
   ProjectStatus,
   ProjectSummary,
   RepositoryConnectionStatus,
+  RevokeEnvironmentSecretInput,
+  RotateEnvironmentSecretInput,
+  SecretLifecycleStatus,
+  SecretSubsystemStatus,
   StageExecutionAttempt,
   StageExecutionLog,
   UpdateEnvironmentInput,
@@ -712,6 +720,103 @@ export function fetchStageExecutionLogs(
   const qs = search.toString();
   return apiRequest<PagedResponse<StageExecutionLog>>(
     `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/stages/${stageRunId}/logs${qs ? `?${qs}` : ''}`
+  );
+}
+
+// --- Phase 3.4: Encrypted Environment Secrets API (Write-Only, Metadata Responses) ---
+
+export function fetchSecretSubsystemStatus(
+  workspaceId: string
+): Promise<SecretSubsystemStatus> {
+  return apiRequest<SecretSubsystemStatus>(`/api/workspaces/${workspaceId}/secrets/status`);
+}
+
+export function fetchEnvironmentSecrets(
+  workspaceId: string,
+  projectId: string,
+  environmentId: string,
+  params: { status?: SecretLifecycleStatus | ''; q?: string; page?: number; size?: number } = {}
+): Promise<PagedResponse<EnvironmentSecretSummary>> {
+  const search = new URLSearchParams();
+  if (params.status) search.set('status', params.status);
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<EnvironmentSecretSummary>>(
+    `/api/workspaces/${workspaceId}/projects/${projectId}/environments/${environmentId}/secrets${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function createEnvironmentSecret(
+  workspaceId: string,
+  projectId: string,
+  environmentId: string,
+  payload: CreateEnvironmentSecretInput
+): Promise<EnvironmentSecretSummary> {
+  return apiRequest<EnvironmentSecretSummary>(
+    `/api/workspaces/${workspaceId}/projects/${projectId}/environments/${environmentId}/secrets`,
+    { method: 'POST', body: payload }
+  );
+}
+
+export function fetchEnvironmentSecretDetail(
+  workspaceId: string,
+  projectId: string,
+  environmentId: string,
+  secretId: string
+): Promise<EnvironmentSecretDetail> {
+  return apiRequest<EnvironmentSecretDetail>(
+    `/api/workspaces/${workspaceId}/projects/${projectId}/environments/${environmentId}/secrets/${secretId}`
+  );
+}
+
+export function fetchEnvironmentSecretVersions(
+  workspaceId: string,
+  projectId: string,
+  environmentId: string,
+  secretId: string
+): Promise<EnvironmentSecretVersion[]> {
+  return apiRequest<EnvironmentSecretVersion[]>(
+    `/api/workspaces/${workspaceId}/projects/${projectId}/environments/${environmentId}/secrets/${secretId}/versions`
+  );
+}
+
+export function rotateEnvironmentSecret(
+  workspaceId: string,
+  projectId: string,
+  environmentId: string,
+  secretId: string,
+  payload: RotateEnvironmentSecretInput
+): Promise<EnvironmentSecretSummary> {
+  return apiRequest<EnvironmentSecretSummary>(
+    `/api/workspaces/${workspaceId}/projects/${projectId}/environments/${environmentId}/secrets/${secretId}/rotate`,
+    { method: 'POST', body: payload }
+  );
+}
+
+export function revokeEnvironmentSecret(
+  workspaceId: string,
+  projectId: string,
+  environmentId: string,
+  secretId: string,
+  payload: RevokeEnvironmentSecretInput = {}
+): Promise<EnvironmentSecretSummary> {
+  return apiRequest<EnvironmentSecretSummary>(
+    `/api/workspaces/${workspaceId}/projects/${projectId}/environments/${environmentId}/secrets/${secretId}/revoke`,
+    { method: 'POST', body: payload }
+  );
+}
+
+export function deleteEnvironmentSecret(
+  workspaceId: string,
+  projectId: string,
+  environmentId: string,
+  secretId: string
+): Promise<void> {
+  return apiRequest<void>(
+    `/api/workspaces/${workspaceId}/projects/${projectId}/environments/${environmentId}/secrets/${secretId}`,
+    { method: 'DELETE' }
   );
 }
 

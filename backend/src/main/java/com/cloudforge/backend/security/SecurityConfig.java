@@ -1,6 +1,8 @@
 package com.cloudforge.backend.security;
 
 import com.cloudforge.backend.config.AppProperties;
+import com.cloudforge.backend.secrets.config.SecretManagementProperties;
+import com.cloudforge.backend.secrets.security.OperatorTokenAuthenticationFilter;
 import com.cloudforge.backend.worker.security.WorkerAuthenticationFilter;
 import com.cloudforge.backend.worker.security.WorkerCredentialService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,6 +39,7 @@ public class SecurityConfig {
     private final ApiAccessDeniedHandler accessDeniedHandler;
     private final RedirectOriginValidator redirectOriginValidator;
     private final WorkerCredentialService workerCredentialService;
+    private final SecretManagementProperties secretManagementProperties;
     private final ObjectMapper objectMapper;
 
     public SecurityConfig(
@@ -48,6 +51,7 @@ public class SecurityConfig {
             ApiAccessDeniedHandler accessDeniedHandler,
             RedirectOriginValidator redirectOriginValidator,
             WorkerCredentialService workerCredentialService,
+            SecretManagementProperties secretManagementProperties,
             ObjectMapper objectMapper
     ) {
         this.appProperties = appProperties;
@@ -58,6 +62,7 @@ public class SecurityConfig {
         this.accessDeniedHandler = accessDeniedHandler;
         this.redirectOriginValidator = redirectOriginValidator;
         this.workerCredentialService = workerCredentialService;
+        this.secretManagementProperties = secretManagementProperties;
         this.objectMapper = objectMapper;
     }
 
@@ -96,8 +101,43 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /**
+     * Dedicated stateless security boundary for operator-only secret key rotation APIs
+     * ({@code /api/internal/operator/secrets/**}). Isolated from browser OAuth/session
+     * authentication and worker credentials.
+     */
     @Bean
     @Order(2)
+    public SecurityFilterChain operatorSecretSecurityFilterChain(HttpSecurity http) throws Exception {
+        http
+                .securityMatcher("/api/internal/operator/secrets/**")
+                .cors(cors -> cors.disable())
+                .csrf(csrf -> csrf.disable())
+                .headers(headers -> headers
+                        .frameOptions(frame -> frame.deny())
+                        .contentTypeOptions(contentType -> { })
+                )
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                .requestCache(cache -> cache.requestCache(new NullRequestCache()))
+                .authorizeHttpRequests(auth -> auth
+                        .anyRequest().hasRole("SECRET_OPERATOR")
+                )
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler)
+                )
+                .addFilterBefore(
+                        new OperatorTokenAuthenticationFilter(secretManagementProperties, objectMapper),
+                        UsernamePasswordAuthenticationFilter.class
+                );
+
+        return http.build();
+    }
+
+    @Bean
+    @Order(3)
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrfTokenRepository.setCookiePath("/");

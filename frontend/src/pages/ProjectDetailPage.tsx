@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { DashboardCard } from '../components/DashboardCard';
+import { EnvironmentSecretsPanel } from '../components/EnvironmentSecretsPanel';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { PageContainer } from '../components/PageContainer';
@@ -311,12 +312,12 @@ export function ProjectDetailPage() {
           </div>
           <div>
             <p className="cf-notice__title">
-              Plaintext secrets are blocked · Deployments are disabled in Phase 2
+              Plaintext secrets are blocked here — use Encrypted Environment Secrets below
             </p>
             <p className="cf-notice__text">
-              Do not store passwords, API keys, or private tokens here. The backend rejects
-              secret-like keys and credential values; encrypted secret management (KMS /
-              External Secrets) and deployment triggers are deferred to Phases 3 and 4.
+              Do not store passwords, API keys, or private tokens in plain config variables.
+              The backend rejects secret-like keys and credential values here; store sensitive
+              credentials in the AES-256-GCM Encrypted Secrets vault below.
             </p>
           </div>
         </div>
@@ -519,6 +520,16 @@ export function ProjectDetailPage() {
           </div>
         )}
       </DashboardCard>
+
+      {selectedEnv && activeWorkspace && (
+        <EnvironmentSecretsPanel
+          workspaceId={activeWorkspace.id}
+          projectId={project.id}
+          environment={selectedEnv}
+          isOwner={activeRole === 'OWNER'}
+          activeRole={activeRole}
+        />
+      )}
     </PageContainer>
   );
 }

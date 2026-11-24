@@ -46,6 +46,9 @@ public class PipelineStageDefinitionEntity extends BaseAuditableEntity {
     @Column(name = "metadata_json", nullable = false, columnDefinition = "TEXT")
     private String metadataJson = "{}";
 
+    @Column(name = "secret_bindings_json", nullable = false, columnDefinition = "TEXT")
+    private String secretBindingsJson = "[]";
+
     public PipelineDefinitionEntity getPipelineDefinition() {
         return pipelineDefinition;
     }
@@ -124,5 +127,13 @@ public class PipelineStageDefinitionEntity extends BaseAuditableEntity {
 
     public void setMetadataJson(String metadataJson) {
         this.metadataJson = metadataJson;
+    }
+
+    public String getSecretBindingsJson() {
+        return secretBindingsJson;
+    }
+
+    public void setSecretBindingsJson(String secretBindingsJson) {
+        this.secretBindingsJson = secretBindingsJson;
     }
 }

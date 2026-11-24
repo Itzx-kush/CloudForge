@@ -3,11 +3,13 @@ package com.cloudforge.worker.agent;
 import com.cloudforge.worker.client.ControlPlaneClient;
 import com.cloudforge.worker.config.WorkerAgentConfig;
 import com.cloudforge.worker.executor.IsolatedExecutionAdapter;
+import com.cloudforge.worker.security.WorkerSecretRedactor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -17,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Execution-plane agent loop coordinating registration, periodic heartbeats, lease renewal,
@@ -143,6 +146,9 @@ public class WorkerAgentLoop implements AutoCloseable {
 
         List<ControlPlaneClient.LogEntry> logBuffer = new ArrayList<>();
         Object bufferLock = new Object();
+        WorkerSecretRedactor redactor = new WorkerSecretRedactor();
+        Map<String, String> ephemeralSecrets = new LinkedHashMap<>();
+        AtomicReference<String> prevLineRef = new AtomicReference<>(null);
 
         try {
             Instant startedAt = Instant.now();
@@ -154,6 +160,44 @@ public class WorkerAgentLoop implements AutoCloseable {
                     startedAt
             );
 
+            if (lease.hasSecretBindings() || (lease.secretAliases() != null && !lease.secretAliases().isEmpty())) {
+                if (!config.secretDeliveryEnabled()) {
+                    String msg = "Worker secret delivery is disabled (CLOUDFORGE_WORKER_SECRET_DELIVERY_ENABLED=false)";
+                    completeDeliveryFailure(lease, startedAt, "SECRET_DELIVERY_DISABLED", msg, redactor);
+                    return;
+                }
+                try {
+                    ControlPlaneClient.SecretDeliveryResult delivery = client.fetchAttemptSecrets(
+                            config.workerId(),
+                            lease.attemptId(),
+                            lease.leaseToken(),
+                            lease.fencingGeneration()
+                    );
+                    if (delivery != null && delivery.secrets() != null) {
+                        for (ControlPlaneClient.DeliveredSecret secret : delivery.secrets()) {
+                            ephemeralSecrets.put(secret.alias(), secret.value());
+                            redactor.addSecrets(List.of(secret.value()));
+                        }
+                    }
+                    if (ephemeralSecrets.isEmpty()) {
+                        completeDeliveryFailure(
+                                lease, startedAt, "SECRET_DELIVERY_DENIED",
+                                "Control plane returned zero authorized secrets for secret-bound stage",
+                                redactor
+                        );
+                        return;
+                    }
+                } catch (Exception ex) {
+                    String safeMsg = redactor.redact(ex.getMessage());
+                    completeDeliveryFailure(
+                            lease, startedAt, "SECRET_DELIVERY_DENIED",
+                            "Failed to retrieve lease-bound secrets: " + (safeMsg != null ? safeMsg : "access denied"),
+                            redactor
+                    );
+                    return;
+                }
+            }
+
             IsolatedExecutionAdapter.ExecutionRequest execRequest = new IsolatedExecutionAdapter.ExecutionRequest(
                     lease.attemptId(),
                     lease.stage().pipelineRunId(),
@@ -163,16 +207,31 @@ public class WorkerAgentLoop implements AutoCloseable {
                     lease.stage().attemptNumber(),
                     lease.stage().timeoutSeconds(),
                     lease.maxLogLines(),
-                    lease.maxLogBytes()
+                    lease.maxLogBytes(),
+                    Map.copyOf(ephemeralSecrets)
             );
 
             IsolatedExecutionAdapter.ExecutionResult result = adapter.execute(
                     execRequest,
                     cancelSignal,
                     (stream, message, occurredAt) -> {
+                        String redactedMsg = redactor.redact(message);
                         List<ControlPlaneClient.LogEntry> batchToFlush = null;
                         synchronized (bufferLock) {
-                            logBuffer.add(new ControlPlaneClient.LogEntry(stream, message, occurredAt));
+                            String prev = prevLineRef.get();
+                            if (prev != null && !logBuffer.isEmpty()) {
+                                WorkerSecretRedactor.BoundaryPair boundary = redactor.redactAcrossBoundary(prev, redactedMsg);
+                                if (boundary.previousModified()) {
+                                    int lastIdx = logBuffer.size() - 1;
+                                    ControlPlaneClient.LogEntry prevEntry = logBuffer.get(lastIdx);
+                                    logBuffer.set(lastIdx, new ControlPlaneClient.LogEntry(
+                                            prevEntry.streamType(), boundary.previousMessage(), prevEntry.occurredAt()
+                                    ));
+                                    redactedMsg = boundary.currentMessage();
+                                }
+                            }
+                            logBuffer.add(new ControlPlaneClient.LogEntry(stream, redactedMsg, occurredAt));
+                            prevLineRef.set(redactedMsg);
                             if (logBuffer.size() >= LOG_FLUSH_BATCH_SIZE) {
                                 batchToFlush = new ArrayList<>(logBuffer);
                                 logBuffer.clear();
@@ -206,8 +265,8 @@ public class WorkerAgentLoop implements AutoCloseable {
                             result.resultStatus(),
                             result.failureCategory(),
                             result.exitCode(),
-                            result.summary(),
-                            result.resourceUsage(),
+                            redactor.redact(result.summary()),
+                            redactResourceUsage(result.resourceUsage(), redactor),
                             result.startedAt(),
                             result.completedAt(),
                             result.terminationConfirmed()
@@ -216,8 +275,58 @@ public class WorkerAgentLoop implements AutoCloseable {
             log.info("Completed stage={} attempt={} status={} exitCode={}",
                     lease.stage().stageKey(), lease.attemptId(), result.resultStatus(), result.exitCode());
         } finally {
+            ephemeralSecrets.clear();
+            redactor.clear();
             activeExecutions.remove(lease.attemptId());
         }
+    }
+
+    private void completeDeliveryFailure(
+            ControlPlaneClient.ClaimedStageLease lease,
+            Instant startedAt,
+            String failureCategory,
+            String summary,
+            WorkerSecretRedactor redactor
+    ) {
+        Instant now = Instant.now();
+        String safeSummary = redactor.redact(summary);
+        flushLogsQuietly(lease, List.of(
+                new ControlPlaneClient.LogEntry("SYSTEM", "[CloudForge Worker] " + safeSummary, now)
+        ));
+        client.completeAttempt(
+                config.workerId(),
+                lease.attemptId(),
+                new ControlPlaneClient.CompletionPayload(
+                        lease.stage().pipelineRunId(),
+                        lease.stage().stageRunId(),
+                        lease.stage().attemptNumber(),
+                        lease.leaseToken(),
+                        lease.fencingGeneration(),
+                        "FAILED",
+                        failureCategory,
+                        126,
+                        safeSummary,
+                        Map.of("secretDeliveryEnabled", config.secretDeliveryEnabled()),
+                        startedAt,
+                        now,
+                        true
+                )
+        );
+    }
+
+    private Map<String, Object> redactResourceUsage(Map<String, Object> raw, WorkerSecretRedactor redactor) {
+        if (raw == null || raw.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> safe = new LinkedHashMap<>();
+        raw.forEach((k, v) -> {
+            if (v instanceof String s) {
+                safe.put(k, redactor.redact(s));
+            } else {
+                safe.put(k, v);
+            }
+        });
+        return safe;
     }
 
     private void flushLogsQuietly(

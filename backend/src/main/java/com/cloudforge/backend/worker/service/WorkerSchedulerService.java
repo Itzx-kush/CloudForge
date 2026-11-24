@@ -10,6 +10,8 @@ import com.cloudforge.backend.orchestration.entity.PipelineStageStatus;
 import com.cloudforge.backend.orchestration.repository.PipelineRunEventRepository;
 import com.cloudforge.backend.orchestration.repository.PipelineRunRepository;
 import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepository;
+import com.cloudforge.backend.secrets.entity.PipelineRunSecretReferenceEntity;
+import com.cloudforge.backend.secrets.repository.PipelineRunSecretReferenceRepository;
 import com.cloudforge.backend.service.AuditService;
 import com.cloudforge.backend.worker.config.WorkerProperties;
 import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
@@ -57,6 +59,7 @@ public class WorkerSchedulerService {
     private final PipelineRunEventRepository runEventRepository;
     private final StageExecutionAttemptRepository attemptRepository;
     private final WorkerRegistryService workerRegistryService;
+    private final PipelineRunSecretReferenceRepository secretReferenceRepository;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
 
@@ -68,6 +71,7 @@ public class WorkerSchedulerService {
             PipelineRunEventRepository runEventRepository,
             StageExecutionAttemptRepository attemptRepository,
             WorkerRegistryService workerRegistryService,
+            PipelineRunSecretReferenceRepository secretReferenceRepository,
             AuditService auditService,
             ObjectMapper objectMapper
     ) {
@@ -78,6 +82,7 @@ public class WorkerSchedulerService {
         this.runEventRepository = runEventRepository;
         this.attemptRepository = attemptRepository;
         this.workerRegistryService = workerRegistryService;
+        this.secretReferenceRepository = secretReferenceRepository;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
     }
@@ -305,6 +310,12 @@ public class WorkerSchedulerService {
                         stage.getAttemptNumber()
                 );
 
+        List<String> secretAliases = stage.isHasSecretBindings()
+                ? secretReferenceRepository.findAllByStageRunIdWithSecretDetails(stage.getId()).stream()
+                        .map(PipelineRunSecretReferenceEntity::getDeliveryAlias)
+                        .toList()
+                : List.of();
+
         return Optional.of(new WorkerAssignmentContract.LeasedStageWork(
                 descriptor,
                 savedAttempt.getId(),
@@ -317,7 +328,9 @@ public class WorkerSchedulerService {
                 leaseExpiresAt,
                 workerProperties.getHeartbeatIntervalSeconds(),
                 workerProperties.getMaxLogLinesPerAttempt(),
-                workerProperties.getMaxLogBytesPerAttempt()
+                workerProperties.getMaxLogBytesPerAttempt(),
+                stage.isHasSecretBindings() && !secretAliases.isEmpty(),
+                secretAliases
         ));
     }
 

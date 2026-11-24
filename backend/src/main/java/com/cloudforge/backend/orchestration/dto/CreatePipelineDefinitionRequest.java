@@ -22,10 +22,22 @@ public record CreatePipelineDefinitionRequest(
 
         UUID linkedRepositoryId,
 
+        UUID targetEnvironmentId,
+
         Boolean enabled,
 
         @NotEmpty(message = "At least one pipeline stage is required")
         @Valid
         List<StageDefinitionRequest> stages
 ) {
+    public CreatePipelineDefinitionRequest(
+            UUID projectId,
+            String name,
+            String description,
+            UUID linkedRepositoryId,
+            Boolean enabled,
+            List<StageDefinitionRequest> stages
+    ) {
+        this(projectId, name, description, linkedRepositoryId, null, enabled, stages);
+    }
 }
