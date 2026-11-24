@@ -80,3 +80,29 @@ jobs:
 
       - name: Build production bundle
         run: npm run build
+
+  worker:
+    name: Worker Test & Real Docker Isolation Verification (Java 17)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Pre-pull pinned minimal executor image (alpine:3.20)
+        run: docker pull alpine:3.20
+
+      - name: Run worker unit and real Docker isolated execution tests
+        run: mvn -B test
+
+      - name: Package standalone worker executable JAR
+        run: mvn -B package -DskipTests

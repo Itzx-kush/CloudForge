@@ -31,6 +31,10 @@ import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepositor
 import com.cloudforge.backend.repository.ProjectRepository;
 import com.cloudforge.backend.service.AuditService;
 import com.cloudforge.backend.service.WorkspaceAuthorizationService;
+import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
+import com.cloudforge.backend.worker.entity.AttemptStatus;
+import com.cloudforge.backend.worker.entity.StageExecutionAttemptEntity;
+import com.cloudforge.backend.worker.repository.StageExecutionAttemptRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -72,6 +76,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
     private final PipelineRunRepository runRepository;
     private final PipelineStageRunRepository stageRunRepository;
     private final PipelineRunEventRepository runEventRepository;
+    private final StageExecutionAttemptRepository attemptRepository;
     private final PipelineIdempotencyService idempotencyService;
     private final StageDagValidator dagValidator;
     private final PipelineDefinitionService definitionService;
@@ -86,6 +91,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
             PipelineRunRepository runRepository,
             PipelineStageRunRepository stageRunRepository,
             PipelineRunEventRepository runEventRepository,
+            StageExecutionAttemptRepository attemptRepository,
             PipelineIdempotencyService idempotencyService,
             StageDagValidator dagValidator,
             PipelineDefinitionService definitionService,
@@ -99,6 +105,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
         this.runRepository = runRepository;
         this.stageRunRepository = stageRunRepository;
         this.runEventRepository = runEventRepository;
+        this.attemptRepository = attemptRepository;
         this.idempotencyService = idempotencyService;
         this.dagValidator = dagValidator;
         this.definitionService = definitionService;
@@ -204,6 +211,12 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
             stageRun.setStageType(spec.stageType());
             stageRun.setExecutionOrder(spec.executionOrder());
             stageRun.setDependsOnJson(writeJson(spec.dependsOn()));
+            stageRun.setMetadataJson(writeJson(spec.metadata()));
+            stageRun.setAllowedOperation(
+                    AllowedWorkerOperation.resolveForStage(spec.stageType(), spec.metadata())
+                            .map(Enum::name)
+                            .orElse(null)
+            );
             stageRun.setTimeoutSeconds(spec.timeoutSeconds());
             stageRun.setMaxRetries(spec.maxRetries());
             stageRun.setAllowFailure(spec.allowFailure());
@@ -365,12 +378,110 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
         if (run.getStatus() == PipelineRunStatus.CANCELLED) {
             return loadRunDto(workspaceId, run.getId());
         }
+        // Reject cancelling already terminal SUCCEEDED/FAILED runs via state machine.
+        if (run.getStatus().isTerminal()) {
+            run.transitionStatus(PipelineRunStatus.CANCELLED, Instant.now(), "Cannot cancel terminal run", user);
+        }
 
         Instant now = Instant.now();
         String userReason = request != null && StringUtils.hasText(request.reason())
                 ? request.reason().trim()
-                : "Cancelled by @" + user.getUsername() + " (orchestration state cancelled prior to worker execution)";
+                : "Cancelled by @" + user.getUsername();
 
+        List<PipelineStageRunEntity> runningStages = stageRuns.stream()
+                .filter(s -> s.getStatus() == PipelineStageStatus.RUNNING)
+                .toList();
+
+        // Cancel all unstarted (PENDING / READY) stages immediately so scheduler cannot claim them.
+        int cancelledUnstartedCount = 0;
+        for (PipelineStageRunEntity stage : stageRuns) {
+            if (stage.getStatus() == PipelineStageStatus.PENDING || stage.getStatus() == PipelineStageStatus.READY) {
+                PipelineStageStatus prevStage = stage.transitionStatus(
+                        PipelineStageStatus.CANCELLED,
+                        now,
+                        "Cancelled because parent pipeline run cancellation was requested"
+                );
+                stageRunRepository.save(stage);
+                cancelledUnstartedCount++;
+                recordEvent(
+                        workspace,
+                        run,
+                        stage,
+                        "STAGE_CANCELLED",
+                        prevStage.name(),
+                        PipelineStageStatus.CANCELLED.name(),
+                        user,
+                        "Unstarted stage cancelled with parent pipeline run",
+                        Map.of("stageType", stage.getStageType().name()),
+                        now
+                );
+            }
+        }
+
+        if (!runningStages.isEmpty()) {
+            // Active isolated worker execution is in flight: persist cancellation intent and signal
+            // active worker leases via heartbeat. Do NOT claim final CANCELLED until termination is confirmed.
+            boolean firstCancelRequest = run.getCancellationRequestedAt() == null;
+            run.recordCancellationRequest(now, userReason, user);
+            runRepository.save(run);
+
+            int signaledAttempts = 0;
+            for (PipelineStageRunEntity runningStage : runningStages) {
+                runningStage.recordCancellationRequest(now);
+                stageRunRepository.save(runningStage);
+                List<StageExecutionAttemptEntity> activeAttempts = attemptRepository.findAllByStageRunIdAndStatusIn(
+                        runningStage.getId(),
+                        List.of(AttemptStatus.CLAIMED, AttemptStatus.RUNNING)
+                );
+                for (StageExecutionAttemptEntity attempt : activeAttempts) {
+                    if (attempt.getCancellationRequestedAt() == null) {
+                        attempt.setCancellationRequestedAt(now);
+                        attemptRepository.save(attempt);
+                        signaledAttempts++;
+                    }
+                }
+            }
+
+            if (firstCancelRequest) {
+                recordEvent(
+                        workspace,
+                        run,
+                        null,
+                        "RUN_CANCELLATION_REQUESTED",
+                        run.getStatus().name(),
+                        run.getStatus().name(),
+                        user,
+                        "Cancellation requested (" + userReason + "); awaiting confirmed worker termination for "
+                                + runningStages.size() + " active stage(s)",
+                        Map.of(
+                                "activeRunningStages", runningStages.size(),
+                                "cancelledUnstartedStages", cancelledUnstartedCount,
+                                "signaledAttempts", signaledAttempts
+                        ),
+                        now
+                );
+                auditService.record(
+                        workspace,
+                        user,
+                        "PIPELINE_RUN_CANCELLATION_REQUESTED",
+                        "PIPELINE_RUN",
+                        run.getId().toString(),
+                        "Requested cancellation of running pipeline #" + run.getRunNumber() + " for \"" + run.getDefinitionName() + "\"",
+                        Map.of(
+                                "activeRunningStages", runningStages.size(),
+                                "cancelledUnstartedStages", cancelledUnstartedCount,
+                                "runNumber", run.getRunNumber()
+                        )
+                );
+            }
+            runRepository.flush();
+            stageRunRepository.flush();
+            attemptRepository.flush();
+            return loadRunDto(workspaceId, run.getId());
+        }
+
+        // No active worker execution in flight: immediately transition run to terminal CANCELLED.
+        run.recordCancellationRequest(now, userReason, user);
         PipelineRunStatus previousStatus = run.transitionStatus(
                 PipelineRunStatus.CANCELLED,
                 now,
@@ -392,30 +503,6 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
                 now
         );
 
-        int cancelledStageCount = 0;
-        for (PipelineStageRunEntity stage : stageRuns) {
-            if (!stage.getStatus().isTerminal()) {
-                PipelineStageStatus prevStage = stage.transitionStatus(
-                        PipelineStageStatus.CANCELLED,
-                        now,
-                        "Cancelled because parent pipeline run was cancelled"
-                );
-                stageRunRepository.save(stage);
-                cancelledStageCount++;
-                recordEvent(
-                        workspace,
-                        run,
-                        stage,
-                        "STAGE_CANCELLED",
-                        prevStage.name(),
-                        PipelineStageStatus.CANCELLED.name(),
-                        user,
-                        "Stage cancelled with parent pipeline run",
-                        Map.of("stageType", stage.getStageType().name()),
-                        now
-                );
-            }
-        }
         runRepository.flush();
         stageRunRepository.flush();
 
@@ -428,7 +515,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
                 "Cancelled pipeline run #" + run.getRunNumber() + " for \"" + run.getDefinitionName() + "\"",
                 Map.of(
                         "previousStatus", previousStatus.name(),
-                        "cancelledStages", cancelledStageCount,
+                        "cancelledStages", cancelledUnstartedCount,
                         "runNumber", run.getRunNumber()
                 )
         );
@@ -564,23 +651,39 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
 
     private PipelineRunDto toRunDto(PipelineRunEntity run, List<PipelineStageRunEntity> stageRuns) {
         List<PipelineStageRunDto> stageDtos = stageRuns.stream()
-                .map(s -> new PipelineStageRunDto(
-                        s.getId(),
-                        s.getStageKey(),
-                        s.getDisplayName(),
-                        s.getStageType(),
-                        s.getExecutionOrder(),
-                        definitionService.readStringList(s.getDependsOnJson()),
-                        s.getTimeoutSeconds(),
-                        s.getMaxRetries(),
-                        s.getAttemptNumber(),
-                        s.isAllowFailure(),
-                        s.getStatus(),
-                        s.getStatusReason(),
-                        s.getReadyAt(),
-                        s.getStartedAt(),
-                        s.getCompletedAt()
-                ))
+                .map(s -> {
+                    boolean supported = StringUtils.hasText(s.getAllowedOperation())
+                            && AllowedWorkerOperation.parseStrict(s.getAllowedOperation())
+                            .map(op -> op.supportsStageType(s.getStageType()))
+                            .orElse(false);
+                    String capabilityMsg = supported
+                            ? null
+                            : AllowedWorkerOperation.unsupportedCapabilityMessage(s.getStageType(), s.getAllowedOperation());
+                    return new PipelineStageRunDto(
+                            s.getId(),
+                            s.getStageKey(),
+                            s.getDisplayName(),
+                            s.getStageType(),
+                            s.getExecutionOrder(),
+                            definitionService.readStringList(s.getDependsOnJson()),
+                            s.getTimeoutSeconds(),
+                            s.getMaxRetries(),
+                            s.getAttemptNumber(),
+                            s.isAllowFailure(),
+                            s.getStatus(),
+                            s.getStatusReason(),
+                            s.getAllowedOperation(),
+                            supported,
+                            capabilityMsg,
+                            s.getAssignedWorkerId(),
+                            s.getLeaseExpiresAt(),
+                            s.getNextRetryAt(),
+                            s.getCancellationRequestedAt(),
+                            s.getReadyAt(),
+                            s.getStartedAt(),
+                            s.getCompletedAt()
+                    );
+                })
                 .toList();
 
         return new PipelineRunDto(
@@ -605,6 +708,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
                 run.getStartedAt(),
                 run.getCompletedAt(),
                 run.getCancelledAt(),
+                run.getCancellationRequestedAt(),
                 run.getRowVersion(),
                 stageDtos,
                 run.getCreatedAt(),

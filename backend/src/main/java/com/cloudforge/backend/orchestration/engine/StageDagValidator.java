@@ -2,6 +2,7 @@ package com.cloudforge.backend.orchestration.engine;
 
 import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.orchestration.entity.PipelineStageType;
+import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -113,7 +114,7 @@ public class StageDagValidator {
             }
 
             List<String> normalizedDeps = normalizeDependencies(raw.dependsOn(), key, prefix, fieldErrors);
-            Map<String, String> sanitizedMetadata = validateMetadata(raw.metadata(), prefix, fieldErrors);
+            Map<String, String> sanitizedMetadata = validateMetadata(raw.metadata(), raw.stageType(), prefix, fieldErrors);
 
             byKey.put(key, new NormalizedStage(
                     key,
@@ -240,6 +241,7 @@ public class StageDagValidator {
 
     private Map<String, String> validateMetadata(
             Map<String, String> rawMetadata,
+            PipelineStageType stageType,
             String prefix,
             Map<String, String> fieldErrors
     ) {
@@ -280,6 +282,21 @@ public class StageDagValidator {
             if (containsForbiddenSecretValue(rawValue)) {
                 fieldErrors.put(prefix + ".metadata." + key,
                         "Metadata value appears to contain a credential or private key, which is prohibited");
+                continue;
+            }
+            if (AllowedWorkerOperation.OPERATION_METADATA_KEY.equalsIgnoreCase(key) && StringUtils.hasText(rawValue)) {
+                var parsedOp = AllowedWorkerOperation.parseStrict(rawValue);
+                if (parsedOp.isEmpty()) {
+                    fieldErrors.put(prefix + ".metadata." + key,
+                            "Unsupported operation \"" + rawValue + "\". Allowed Phase 3.3 operations: ENV_VALIDATION, CONTROLLED_SMOKE_TEST, WORKER_DIAGNOSTICS");
+                    continue;
+                }
+                if (stageType != null && !parsedOp.get().supportsStageType(stageType)) {
+                    fieldErrors.put(prefix + ".metadata." + key,
+                            "Operation " + parsedOp.get().name() + " is not compatible with stage type " + stageType.name());
+                    continue;
+                }
+                sanitized.put(AllowedWorkerOperation.OPERATION_METADATA_KEY, parsedOp.get().name());
                 continue;
             }
             sanitized.put(key, rawValue);

@@ -3,6 +3,9 @@ import {
   Activity,
   AlertTriangle,
   Ban,
+  ChevronDown,
+  ChevronUp,
+  Cpu,
   Edit3,
   GitBranch,
   History,
@@ -11,6 +14,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Terminal,
   Trash2,
   Workflow,
 } from 'lucide-react';
@@ -34,18 +38,28 @@ import {
   fetchPipelineRuns,
   fetchProjects,
   fetchRepositories,
+  fetchStageExecutionAttempts,
+  fetchStageExecutionLogs,
+  fetchWorkerPoolStatus,
   updatePipelineDefinition,
 } from '../services/api';
 import type {
+  AllowedWorkerOperation,
+  AttemptStatus,
   LinkedRepository,
   PipelineDefinition,
   PipelineRun,
   PipelineRunEvent,
   PipelineRunStatus,
+  PipelineStageRun,
   PipelineStageStatus,
   PipelineStageType,
   ProjectSummary,
   StageDefinitionInput,
+  StageExecutionAttempt,
+  StageExecutionLog,
+  WorkerPoolStatus,
+  WorkerStatus,
 } from '../types/platform';
 import './CloudForgePipelinesPanel.css';
 
@@ -86,11 +100,43 @@ const STAGE_STATUS_META: Record<
   CANCELLED: { label: 'Cancelled', tone: 'neutral' },
 };
 
+const ALLOWLISTED_OPS_BY_STAGE_TYPE: Partial<
+  Record<PipelineStageType, Array<{ value: AllowedWorkerOperation; label: string }>>
+> = {
+  SOURCE_PREP: [
+    { value: 'ENV_VALIDATION', label: 'ENV_VALIDATION (Container sandbox check)' },
+    { value: 'WORKER_DIAGNOSTICS', label: 'WORKER_DIAGNOSTICS (Resource & isolation probe)' },
+  ],
+  TEST: [
+    { value: 'CONTROLLED_SMOKE_TEST', label: 'CONTROLLED_SMOKE_TEST (Deterministic smoke test)' },
+    { value: 'WORKER_DIAGNOSTICS', label: 'WORKER_DIAGNOSTICS (Resource & isolation probe)' },
+  ],
+};
+
+const WORKER_STATUS_META: Record<WorkerStatus, { label: string; tone: BadgeTone; pulse?: boolean }> = {
+  AVAILABLE: { label: 'Available', tone: 'healthy', pulse: true },
+  BUSY: { label: 'Busy', tone: 'info', pulse: true },
+  DRAINING: { label: 'Draining', tone: 'degraded' },
+  OFFLINE: { label: 'Offline', tone: 'neutral' },
+};
+
+const ATTEMPT_STATUS_META: Record<AttemptStatus, { label: string; tone: BadgeTone }> = {
+  CLAIMED: { label: 'Starting (Claimed)', tone: 'info' },
+  RUNNING: { label: 'Running', tone: 'info' },
+  SUCCEEDED: { label: 'Succeeded', tone: 'healthy' },
+  FAILED: { label: 'Failed', tone: 'error' },
+  TIMED_OUT: { label: 'Timed Out', tone: 'error' },
+  CANCELLED: { label: 'Cancelled', tone: 'neutral' },
+  INTERRUPTED: { label: 'Interrupted', tone: 'degraded' },
+  EXPIRED: { label: 'Lease Expired (Recovered)', tone: 'degraded' },
+};
+
 interface EditableStageRow {
   localId: string;
   stageKey: string;
   displayName: string;
   stageType: PipelineStageType;
+  allowedOperation: string;
   dependsOn: string[];
   timeoutSeconds: number;
   maxRetries: number;
@@ -104,6 +150,7 @@ function defaultStarterStages(): EditableStageRow[] {
       stageKey: 'source',
       displayName: 'Source Preparation',
       stageType: 'SOURCE_PREP',
+      allowedOperation: 'ENV_VALIDATION',
       dependsOn: [],
       timeoutSeconds: 300,
       maxRetries: 0,
@@ -114,6 +161,7 @@ function defaultStarterStages(): EditableStageRow[] {
       stageKey: 'build',
       displayName: 'Application Build',
       stageType: 'BUILD',
+      allowedOperation: '',
       dependsOn: ['source'],
       timeoutSeconds: 600,
       maxRetries: 1,
@@ -124,6 +172,7 @@ function defaultStarterStages(): EditableStageRow[] {
       stageKey: 'test',
       displayName: 'Automated Test Suite',
       stageType: 'TEST',
+      allowedOperation: 'CONTROLLED_SMOKE_TEST',
       dependsOn: ['build'],
       timeoutSeconds: 600,
       maxRetries: 0,
@@ -164,6 +213,14 @@ export function CloudForgePipelinesPanel() {
   const [totalDefinitions, setTotalDefinitions] = useState(0);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [totalRuns, setTotalRuns] = useState(0);
+  const [workerPool, setWorkerPool] = useState<WorkerPoolStatus | null>(null);
+
+  // Stage execution attempts & bounded sanitized logs state (keyed by stageRunId)
+  const [expandedStageId, setExpandedStageId] = useState<string | null>(null);
+  const [stageAttempts, setStageAttempts] = useState<Record<string, StageExecutionAttempt[]>>({});
+  const [stageLogs, setStageLogs] = useState<Record<string, StageExecutionLog[]>>({});
+  const [stageExecLoading, setStageExecLoading] = useState<Record<string, boolean>>({});
+  const [stageExecError, setStageExecError] = useState<Record<string, string | null>>({});
 
   // Filters
   const [projectFilter, setProjectFilter] = useState('');
@@ -231,7 +288,7 @@ export function CloudForgePipelinesPanel() {
       setErrorMessage(null);
 
       try {
-        const [projRes, repoRes, defRes, runRes] = await Promise.all([
+        const [projRes, repoRes, defRes, runRes, workerRes] = await Promise.all([
           fetchProjects(activeWorkspace.id, { page: 0, size: 100 }),
           fetchRepositories(activeWorkspace.id, { page: 0, size: 100 }),
           fetchPipelineDefinitions(activeWorkspace.id, {
@@ -247,6 +304,7 @@ export function CloudForgePipelinesPanel() {
             page: 0,
             size: 25,
           }),
+          fetchWorkerPoolStatus(activeWorkspace.id).catch(() => null),
         ]);
 
         setProjects(Array.isArray(projRes.items) ? projRes.items : []);
@@ -255,6 +313,9 @@ export function CloudForgePipelinesPanel() {
         setTotalDefinitions(defRes.totalElements ?? 0);
         setRuns(Array.isArray(runRes.items) ? runRes.items : []);
         setTotalRuns(runRes.totalElements ?? 0);
+        setWorkerPool(
+          workerRes && typeof workerRes.workerPlaneEnabled === 'boolean' ? workerRes : null
+        );
       } catch (error) {
         setErrorMessage(
           error instanceof Error
@@ -300,6 +361,7 @@ export function CloudForgePipelinesPanel() {
         stageKey: s.stageKey,
         displayName: s.displayName,
         stageType: s.stageType,
+        allowedOperation: s.metadata?.operation ?? '',
         dependsOn: [...s.dependsOn],
         timeoutSeconds: s.timeoutSeconds,
         maxRetries: s.maxRetries,
@@ -320,7 +382,8 @@ export function CloudForgePipelinesPanel() {
         localId: `stage-${Date.now()}-${idx}`,
         stageKey: `stage_${idx}`,
         displayName: `Stage ${idx}`,
-        stageType: 'SECURITY_SCAN',
+        stageType: 'TEST',
+        allowedOperation: 'WORKER_DIAGNOSTICS',
         dependsOn: prevKey ? [prevKey] : [],
         timeoutSeconds: 600,
         maxRetries: 0,
@@ -377,6 +440,7 @@ export function CloudForgePipelinesPanel() {
       timeoutSeconds: Number(s.timeoutSeconds) || 600,
       maxRetries: Number(s.maxRetries) || 0,
       allowFailure: s.allowFailure,
+      metadata: s.allowedOperation ? { operation: s.allowedOperation } : undefined,
     }));
 
     try {
@@ -474,6 +538,10 @@ export function CloudForgePipelinesPanel() {
 
   const openRunDetails = async (run: PipelineRun) => {
     setSelectedRun(run);
+    setExpandedStageId(null);
+    setStageAttempts({});
+    setStageLogs({});
+    setStageExecError({});
     setRunEvents([]);
     setEventsError(null);
     if (!activeWorkspace) return;
@@ -488,6 +556,68 @@ export function CloudForgePipelinesPanel() {
     } finally {
       setIsLoadingEvents(false);
     }
+  };
+
+  const loadStageExecutionDetails = async (runId: string, stage: PipelineStageRun) => {
+    if (!activeWorkspace) return;
+    setStageExecLoading((prev) => ({ ...prev, [stage.id]: true }));
+    setStageExecError((prev) => ({ ...prev, [stage.id]: null }));
+    try {
+      const [attemptsRes, logsRes] = await Promise.all([
+        fetchStageExecutionAttempts(activeWorkspace.id, runId, stage.id),
+        fetchStageExecutionLogs(activeWorkspace.id, runId, stage.id, { page: 0, size: 150 }),
+      ]);
+      setStageAttempts((prev) => ({
+        ...prev,
+        [stage.id]: Array.isArray(attemptsRes) ? attemptsRes : [],
+      }));
+      setStageLogs((prev) => ({
+        ...prev,
+        [stage.id]: Array.isArray(logsRes.items) ? logsRes.items : [],
+      }));
+    } catch (error) {
+      setStageExecError((prev) => ({
+        ...prev,
+        [stage.id]:
+          error instanceof Error
+            ? error.message
+            : 'Unable to load execution attempts and sanitized logs.',
+      }));
+    } finally {
+      setStageExecLoading((prev) => ({ ...prev, [stage.id]: false }));
+    }
+  };
+
+  const toggleStageExecutionDrawer = (runId: string, stage: PipelineStageRun) => {
+    if (expandedStageId === stage.id) {
+      setExpandedStageId(null);
+      return;
+    }
+    setExpandedStageId(stage.id);
+    void loadStageExecutionDetails(runId, stage);
+  };
+
+  const resolveRunStatusBadge = (
+    run: PipelineRun
+  ): { label: string; tone: BadgeTone; pulse?: boolean } => {
+    if (run.status === 'RUNNING' && run.cancellationRequestedAt) {
+      return {
+        label: 'Cancelling — Awaiting worker termination',
+        tone: 'degraded',
+        pulse: true,
+      };
+    }
+    if (run.status === 'QUEUED') {
+      if (workerPool?.workerPlaneEnabled) {
+        return {
+          label: 'QUEUED — Awaiting available worker',
+          tone: 'degraded',
+          pulse: true,
+        };
+      }
+      return RUN_STATUS_META.QUEUED;
+    }
+    return RUN_STATUS_META[run.status];
   };
 
   const openCancelModal = (run: PipelineRun) => {
@@ -665,7 +795,7 @@ export function CloudForgePipelinesPanel() {
       key: 'status',
       header: 'Orchestration Status',
       render: (row) => {
-        const meta = RUN_STATUS_META[row.status];
+        const meta = resolveRunStatusBadge(row);
         return (
           <StatusBadge
             label={meta.label}
@@ -820,6 +950,120 @@ export function CloudForgePipelinesPanel() {
           <div className="cf-stat-tile__meta">Stopped in orchestration state</div>
         </div>
       </section>
+
+      {/* Phase 3.3 Isolated Worker Pool Status Card */}
+      {workerPool && (
+        <DashboardCard
+          title="Isolated Worker Execution Plane"
+          subtitle="Live persisted worker availability, active leases, and allowlisted Phase 3.3 operations"
+          icon={<Cpu size={17} />}
+          headerAction={
+            <StatusBadge
+              label={
+                !workerPool.workerPlaneEnabled
+                  ? 'Execution Plane Disabled'
+                  : workerPool.availableWorkers > 0
+                    ? `${workerPool.availableWorkers} Worker${workerPool.availableWorkers === 1 ? '' : 's'} Available`
+                    : workerPool.busyWorkers > 0
+                      ? `${workerPool.busyWorkers} Worker${workerPool.busyWorkers === 1 ? '' : 's'} Busy`
+                      : 'No Active Workers'
+              }
+              tone={
+                !workerPool.workerPlaneEnabled
+                  ? 'neutral'
+                  : workerPool.availableWorkers > 0
+                    ? 'healthy'
+                    : workerPool.busyWorkers > 0
+                      ? 'info'
+                      : 'degraded'
+              }
+              pulse={workerPool.availableWorkers > 0 || workerPool.busyWorkers > 0}
+              size="sm"
+            />
+          }
+        >
+          <div className="cf-worker-pool-grid" data-testid="worker-pool-summary">
+            <div className="cf-worker-metric">
+              <span className="cf-worker-metric__label">Registered Workers</span>
+              <span className="cf-worker-metric__value" data-testid="worker-registered-count">
+                {workerPool.registeredWorkers}
+              </span>
+            </div>
+            <div className="cf-worker-metric">
+              <span className="cf-worker-metric__label">Available / Busy</span>
+              <span className="cf-worker-metric__value" data-testid="worker-available-busy">
+                {workerPool.availableWorkers} / {workerPool.busyWorkers}
+              </span>
+            </div>
+            <div className="cf-worker-metric">
+              <span className="cf-worker-metric__label">Offline Workers</span>
+              <span className="cf-worker-metric__value">{workerPool.offlineWorkers}</span>
+            </div>
+            <div className="cf-worker-metric">
+              <span className="cf-worker-metric__label">Active Leases</span>
+              <span className="cf-worker-metric__value">{workerPool.activeAssignments}</span>
+            </div>
+            <div className="cf-worker-metric">
+              <span className="cf-worker-metric__label">Workspace Running</span>
+              <span className="cf-worker-metric__value">{workerPool.workspaceRunningStages}</span>
+            </div>
+            <div className="cf-worker-metric">
+              <span className="cf-worker-metric__label">Failed Attempts</span>
+              <span className="cf-worker-metric__value">{workerPool.workspaceFailedAttempts}</span>
+            </div>
+          </div>
+
+          {!workerPool.workerPlaneEnabled ? (
+            <p className="cf-muted" style={{ margin: '10px 0 0', fontSize: '12.5px' }}>
+              Worker scheduling is disabled on this control-plane instance (default safe setting for
+              Render staging). Enable <span className="mono">CLOUDFORGE_WORKERS_ENABLED=true</span>{' '}
+              locally and run a trusted host-side worker agent to execute allowlisted operations:{' '}
+              <span className="mono">{workerPool.supportedOperations.join(', ')}</span>.
+            </p>
+          ) : workerPool.registeredWorkers === 0 ? (
+            <p className="cf-muted" style={{ margin: '10px 0 0', fontSize: '12.5px' }}>
+              Worker control plane is enabled, but no trusted workers are currently registered.
+              Queued allowlisted stages remain in <span className="mono">READY</span> until a worker
+              connects.
+            </p>
+          ) : null}
+
+          {workerPool.workers.length > 0 && (
+            <div className="cf-worker-node-list" aria-label="Registered worker nodes">
+              {workerPool.workers.map((node) => {
+                const wMeta = WORKER_STATUS_META[node.status];
+                return (
+                  <div key={node.workerId} className="cf-worker-node-row">
+                    <div className="cf-worker-node-row__id">
+                      <span>{node.workerId}</span>
+                      <StatusBadge
+                        label={wMeta.label}
+                        tone={wMeta.tone}
+                        pulse={Boolean(wMeta.pulse)}
+                        size="sm"
+                      />
+                      <span className="cf-stage-pill">{node.adapterType}</span>
+                    </div>
+                    <div className="cf-worker-node-row__meta">
+                      <span>
+                        Slots:{' '}
+                        <strong className="mono">
+                          {node.activeAssignments}/{node.maxConcurrency}
+                        </strong>
+                      </span>
+                      <span>
+                        Heartbeat:{' '}
+                        <strong className="mono">{formatTimestamp(node.lastHeartbeatAt)}</strong>
+                      </span>
+                      <span className="mono">{node.supportedOperations.join(', ')}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </DashboardCard>
+      )}
 
       {/* Definitions Card */}
       <DashboardCard
@@ -1175,12 +1419,19 @@ export function CloudForgePipelinesPanel() {
                           id={`stage-type-${stage.localId}`}
                           className="cf-select"
                           value={stage.stageType}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const nextType = e.target.value as PipelineStageType;
+                            const compatible = ALLOWLISTED_OPS_BY_STAGE_TYPE[nextType] ?? [];
                             updateStageRow(stage.localId, (row) => ({
                               ...row,
-                              stageType: e.target.value as PipelineStageType,
-                            }))
-                          }
+                              stageType: nextType,
+                              allowedOperation: compatible.some(
+                                (o) => o.value === row.allowedOperation
+                              )
+                                ? row.allowedOperation
+                                : '',
+                            }));
+                          }}
                         >
                           {STAGE_TYPE_OPTIONS.map((opt) => (
                             <option key={opt.value} value={opt.value}>
@@ -1235,6 +1486,40 @@ export function CloudForgePipelinesPanel() {
                           }
                         />
                       </div>
+                    </div>
+
+                    <div className="cf-field">
+                      <label
+                        htmlFor={`stage-op-${stage.localId}`}
+                        className="cf-field__label"
+                      >
+                        Allowlisted Worker Operation (Phase 3.3)
+                      </label>
+                      {(ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 ? (
+                        <select
+                          id={`stage-op-${stage.localId}`}
+                          className="cf-select mono"
+                          value={stage.allowedOperation}
+                          onChange={(e) =>
+                            updateStageRow(stage.localId, (row) => ({
+                              ...row,
+                              allowedOperation: e.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Declarative only (not dispatched to workers)</option>
+                          {(ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType] ?? []).map((op) => (
+                            <option key={op.value} value={op.value}>
+                              {op.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="cf-stage-capability-note">
+                          Declarative stage — isolated execution for {formatStageTypeLabel(stage.stageType)}{' '}
+                          stages is planned for later phases (arbitrary builds/deployments disabled).
+                        </div>
+                      )}
                     </div>
 
                     {candidateDeps.length > 0 && (
@@ -1427,9 +1712,9 @@ export function CloudForgePipelinesPanel() {
           <div className="cf-run-detail-section">
             <div className="cf-run-detail-header-strip">
               <StatusBadge
-                label={RUN_STATUS_META[selectedRun.status].label}
-                tone={RUN_STATUS_META[selectedRun.status].tone}
-                pulse={Boolean(RUN_STATUS_META[selectedRun.status].pulse)}
+                label={resolveRunStatusBadge(selectedRun).label}
+                tone={resolveRunStatusBadge(selectedRun).tone}
+                pulse={Boolean(resolveRunStatusBadge(selectedRun).pulse)}
                 size="sm"
               />
               <span className="mono cf-muted" style={{ fontSize: '12px' }}>
@@ -1495,6 +1780,11 @@ export function CloudForgePipelinesPanel() {
               <div className="cf-orch-stage-list">
                 {selectedRun.stages.map((stage) => {
                   const sMeta = STAGE_STATUS_META[stage.status];
+                  const isExpanded = expandedStageId === stage.id;
+                  const attempts = stageAttempts[stage.id] ?? [];
+                  const logs = stageLogs[stage.id] ?? [];
+                  const execLoading = Boolean(stageExecLoading[stage.id]);
+                  const execError = stageExecError[stage.id];
                   return (
                     <div key={stage.id} className="cf-orch-stage-card">
                       <div className="cf-orch-stage-card__top">
@@ -1505,6 +1795,9 @@ export function CloudForgePipelinesPanel() {
                           <span className="cf-event-pill">
                             {formatStageTypeLabel(stage.stageType)}
                           </span>
+                          {stage.allowedOperation && (
+                            <span className="cf-stage-pill">{stage.allowedOperation}</span>
+                          )}
                         </div>
                         <StatusBadge
                           label={sMeta.label}
@@ -1521,15 +1814,186 @@ export function CloudForgePipelinesPanel() {
                           </strong>
                         </span>
                         <span>
-                          Timeout: <strong className="mono">{stage.timeoutSeconds}s</strong>
+                          Attempts:{' '}
+                          <strong className="mono">
+                            {stage.attemptNumber} / {stage.maxRetries + 1}
+                          </strong>
                         </span>
                         <span>
-                          Max retries: <strong className="mono">{stage.maxRetries}</strong>
+                          Timeout: <strong className="mono">{stage.timeoutSeconds}s</strong>
                         </span>
+                        {stage.assignedWorkerId && (
+                          <span>
+                            Worker: <strong className="mono">{stage.assignedWorkerId}</strong>
+                          </span>
+                        )}
+                        {stage.nextRetryAt && (
+                          <span>
+                            Next retry:{' '}
+                            <strong className="mono">{formatTimestamp(stage.nextRetryAt)}</strong>
+                          </span>
+                        )}
                       </div>
                       {stage.statusReason && (
                         <div className="cf-muted" style={{ fontSize: '12px' }}>
                           {stage.statusReason}
+                        </div>
+                      )}
+                      {stage.executionSupported === false && stage.capabilityMessage && (
+                        <div className="cf-stage-capability-note" role="note">
+                          <strong>Capability boundary:</strong> {stage.capabilityMessage}
+                        </div>
+                      )}
+
+                      <div className="cf-inline-actions">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          aria-expanded={isExpanded}
+                          onClick={() => toggleStageExecutionDrawer(selectedRun.id, stage)}
+                        >
+                          <Terminal size={12} aria-hidden="true" />
+                          <span>
+                            {isExpanded ? 'Hide Attempts & Logs' : 'View Attempts & Logs'}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp size={12} aria-hidden="true" />
+                          ) : (
+                            <ChevronDown size={12} aria-hidden="true" />
+                          )}
+                        </button>
+                        {isExpanded && (
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            disabled={execLoading}
+                            onClick={() => void loadStageExecutionDetails(selectedRun.id, stage)}
+                          >
+                            <RefreshCw
+                              size={12}
+                              className={execLoading ? 'cf-spin' : ''}
+                              aria-hidden="true"
+                            />
+                            <span>Refresh Logs</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {isExpanded && (
+                        <div
+                          className="cf-stage-execution-drawer"
+                          data-testid={`stage-exec-drawer-${stage.stageKey}`}
+                        >
+                          {execLoading ? (
+                            <LoadingState
+                              title="Loading execution attempts and logs"
+                              description="Fetching persisted worker leases and sanitized container output..."
+                            />
+                          ) : execError ? (
+                            <ErrorState
+                              title="Unable to load execution details"
+                              message={execError}
+                              onRetry={() => void loadStageExecutionDetails(selectedRun.id, stage)}
+                            />
+                          ) : (
+                            <>
+                              <div>
+                                <strong style={{ fontSize: '12px' }}>
+                                  Execution Attempts ({attempts.length})
+                                </strong>
+                                {attempts.length === 0 ? (
+                                  <p className="cf-muted" style={{ margin: '4px 0 0', fontSize: '12px' }}>
+                                    No worker execution attempts recorded yet for this stage.
+                                  </p>
+                                ) : (
+                                  <div className="cf-attempt-list" style={{ marginTop: '6px' }}>
+                                    {attempts.map((att) => {
+                                      const aMeta = ATTEMPT_STATUS_META[att.status];
+                                      return (
+                                        <div key={att.id} className="cf-attempt-row">
+                                          <div className="cf-attempt-row__top">
+                                            <span className="mono">
+                                              Attempt #{att.attemptNumber} · worker{' '}
+                                              <strong>{att.workerId}</strong> · fence{' '}
+                                              {att.fencingGeneration}
+                                            </span>
+                                            <StatusBadge
+                                              label={aMeta.label}
+                                              tone={aMeta.tone}
+                                              size="sm"
+                                            />
+                                          </div>
+                                          <div className="cf-orch-stage-card__meta">
+                                            <span>
+                                              Operation:{' '}
+                                              <strong className="mono">{att.allowedOperation}</strong>
+                                            </span>
+                                            {att.exitCode !== null && (
+                                              <span>
+                                                Exit code:{' '}
+                                                <strong className="mono">{att.exitCode}</strong>
+                                              </span>
+                                            )}
+                                            {att.failureCategory !== 'NONE' && (
+                                              <span>
+                                                Category:{' '}
+                                                <strong className="mono">
+                                                  {att.failureCategory}
+                                                </strong>
+                                              </span>
+                                            )}
+                                            <span>
+                                              Started:{' '}
+                                              <strong className="mono">
+                                                {formatTimestamp(att.startedAt)}
+                                              </strong>
+                                            </span>
+                                          </div>
+                                          {att.summary && (
+                                            <div className="cf-muted">{att.summary}</div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div>
+                                <strong style={{ fontSize: '12px' }}>
+                                  Sanitized Execution Logs ({logs.length})
+                                </strong>
+                                {logs.length === 0 ? (
+                                  <p className="cf-muted" style={{ margin: '4px 0 0', fontSize: '12px' }}>
+                                    No execution logs captured yet.
+                                  </p>
+                                ) : (
+                                  <div
+                                    className="cf-log-console"
+                                    role="log"
+                                    aria-label={`Execution logs for stage ${stage.stageKey}`}
+                                    style={{ marginTop: '6px' }}
+                                  >
+                                    <ol className="cf-log-list">
+                                      {logs.map((entry) => (
+                                        <li key={entry.id} className="cf-log-line">
+                                          <span className="cf-log-line__seq">
+                                            {entry.sequenceNumber}
+                                          </span>
+                                          <span
+                                            className={`cf-log-line__stream cf-log-line__stream--${entry.streamType}`}
+                                          >
+                                            {entry.streamType}
+                                          </span>
+                                          <span className="cf-log-line__msg">{entry.message}</span>
+                                        </li>
+                                      ))}
+                                    </ol>
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

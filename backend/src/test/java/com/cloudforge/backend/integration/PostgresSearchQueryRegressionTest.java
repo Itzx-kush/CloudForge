@@ -22,6 +22,18 @@ import com.cloudforge.backend.orchestration.repository.PipelineDefinitionReposit
 import com.cloudforge.backend.orchestration.repository.PipelineRunRepository;
 import com.cloudforge.backend.orchestration.service.PipelineDefinitionService;
 import com.cloudforge.backend.orchestration.service.PipelineOrchestrationService;
+import com.cloudforge.backend.worker.dto.AppendExecutionLogsRequest;
+import com.cloudforge.backend.worker.dto.CompleteAttemptRequest;
+import com.cloudforge.backend.worker.dto.WorkerRegistrationRequest;
+import com.cloudforge.backend.worker.entity.AttemptFailureCategory;
+import com.cloudforge.backend.worker.entity.AttemptStatus;
+import com.cloudforge.backend.worker.entity.LogStreamType;
+import com.cloudforge.backend.worker.entity.WorkerAdapterType;
+import com.cloudforge.backend.worker.security.WorkerPrincipal;
+import com.cloudforge.backend.worker.service.WorkerExecutionLogService;
+import com.cloudforge.backend.worker.service.WorkerRegistryService;
+import com.cloudforge.backend.worker.service.WorkerResultProcessorService;
+import com.cloudforge.backend.worker.service.WorkerSchedulerService;
 import com.cloudforge.backend.repository.AuditEventRepository;
 import com.cloudforge.backend.repository.GitHubInstallationRepository;
 import com.cloudforge.backend.repository.GitHubWorkflowRepository;
@@ -84,6 +96,8 @@ class PostgresSearchQueryRegressionTest {
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.jpa.properties.hibernate.boot.allow_jdbc_metadata_access", () -> "true");
         registry.add("spring.jpa.properties.jakarta.persistence.database-product-name", () -> "PostgreSQL");
+        registry.add("cloudforge.workers.enabled", () -> "true");
+        registry.add("cloudforge.workers.scheduler-enabled", () -> "false");
     }
 
     @Autowired
@@ -133,6 +147,18 @@ class PostgresSearchQueryRegressionTest {
 
     @Autowired
     private PipelineRunRepository pipelineRunRepository;
+
+    @Autowired
+    private WorkerRegistryService workerRegistryService;
+
+    @Autowired
+    private WorkerSchedulerService workerSchedulerService;
+
+    @Autowired
+    private WorkerExecutionLogService workerExecutionLogService;
+
+    @Autowired
+    private WorkerResultProcessorService workerResultProcessorService;
 
     private UserEntity ownerA;
     private UserEntity ownerB;
@@ -440,6 +466,101 @@ class PostgresSearchQueryRegressionTest {
                         .with(authenticatedUser(ownerA)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].eventType").value("RUN_QUEUED"));
+    }
+
+    @Test
+    void phase33WorkerRegistrationClaimLogsCompletionAndProgressionWorkOnPostgreSql() {
+        var def = pipelineDefinitionService.createDefinition(
+                workspaceA.getId(),
+                new CreatePipelineDefinitionRequest(
+                        projectA1.getId(),
+                        "PG Worker Execution Pipeline",
+                        "PostgreSQL 17 worker lifecycle check",
+                        repoA1.getId(),
+                        true,
+                        java.util.List.of(
+                                new StageDefinitionRequest(
+                                        "env", "Env Validation", PipelineStageType.SOURCE_PREP,
+                                        java.util.List.of(), 120, 0, false, Map.of("operation", "ENV_VALIDATION")
+                                ),
+                                new StageDefinitionRequest(
+                                        "smoke", "Smoke Test", PipelineStageType.TEST,
+                                        java.util.List.of("env"), 120, 0, false, Map.of("operation", "CONTROLLED_SMOKE_TEST")
+                                )
+                        )
+                ),
+                ownerA
+        );
+
+        var run = pipelineOrchestrationService.createRun(
+                workspaceA.getId(),
+                new CreatePipelineRunRequest(def.id(), "main", null, PipelineTriggerType.MANUAL, null),
+                "pg-worker-run-" + java.util.UUID.randomUUID(),
+                ownerA
+        ).run();
+
+        String workerId = "pg-worker-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        WorkerPrincipal principal = new WorkerPrincipal(workerId, "pg-key-" + workerId);
+        workerRegistryService.registerWorker(
+                new WorkerRegistrationRequest(
+                        workerId, "PG CI Worker", WorkerAdapterType.DOCKER_ISOLATED,
+                        java.util.List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST"), 1, "pg-ci", "0.3.3"
+                ),
+                principal
+        );
+
+        var leased1 = workerSchedulerService.claimNextEligibleStage(workerId, principal).orElseThrow();
+        assertThat(leased1.stage().stageKey()).isEqualTo("env");
+
+        var logResp = workerExecutionLogService.appendWorkerLogs(
+                workerId,
+                leased1.attemptId(),
+                new AppendExecutionLogsRequest(
+                        leased1.leaseToken(),
+                        leased1.fencingGeneration(),
+                        java.util.List.of(new AppendExecutionLogsRequest.LogEntryInput(
+                                LogStreamType.STDOUT,
+                                "PG isolated container ok Authorization: Bearer secret_pg_token_12345",
+                                Instant.now()
+                        ))
+                ),
+                principal
+        );
+        assertThat(logResp.acceptedCount()).isEqualTo(1);
+
+        workerResultProcessorService.completeAttempt(
+                workerId,
+                leased1.attemptId(),
+                new CompleteAttemptRequest(
+                        run.id(), leased1.stage().stageRunId(), 1, leased1.leaseToken(), leased1.fencingGeneration(),
+                        AttemptStatus.SUCCEEDED, AttemptFailureCategory.NONE, 0, "Env valid",
+                        Map.of("durationMs", 42), Instant.now(), Instant.now(), true
+                ),
+                principal
+        );
+
+        var leased2 = workerSchedulerService.claimNextEligibleStage(workerId, principal).orElseThrow();
+        assertThat(leased2.stage().stageKey()).isEqualTo("smoke");
+
+        workerResultProcessorService.completeAttempt(
+                workerId,
+                leased2.attemptId(),
+                new CompleteAttemptRequest(
+                        run.id(), leased2.stage().stageRunId(), 1, leased2.leaseToken(), leased2.fencingGeneration(),
+                        AttemptStatus.SUCCEEDED, AttemptFailureCategory.NONE, 0, "Smoke valid",
+                        Map.of("durationMs", 35), Instant.now(), Instant.now(), true
+                ),
+                principal
+        );
+
+        var completedRun = pipelineOrchestrationService.getRun(workspaceA.getId(), run.id(), ownerA);
+        assertThat(completedRun.status()).isEqualTo(PipelineRunStatus.SUCCEEDED);
+
+        var storedLogs = workerExecutionLogService.listWorkspaceStageLogs(
+                workspaceA.getId(), run.id(), leased1.stage().stageRunId(), 1, PageRequest.of(0, 10), ownerA.getId()
+        );
+        assertThat(storedLogs.items()).hasSize(1);
+        assertThat(storedLogs.items().get(0).message()).contains("[REDACTED]").doesNotContain("secret_pg_token_12345");
     }
 
     private LinkedRepositoryEntity saveRepo(

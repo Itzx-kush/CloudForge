@@ -25,9 +25,12 @@ import type {
   ProjectStatus,
   ProjectSummary,
   RepositoryConnectionStatus,
+  StageExecutionAttempt,
+  StageExecutionLog,
   UpdateEnvironmentInput,
   UpdatePipelineDefinitionInput,
   UpdateProjectInput,
+  WorkerPoolStatus,
   WorkflowRunJobsResponse,
   WorkflowRunNormalizedStatus,
   WorkspaceMember,
@@ -673,6 +676,42 @@ export function fetchPipelineRunEvents(
 ): Promise<PipelineRunEvent[]> {
   return apiRequest<PipelineRunEvent[]>(
     `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/events`
+  );
+}
+
+// --- Phase 3.3: Isolated Worker Telemetry, Attempts & Sanitized Execution Logs ---
+
+export function fetchWorkerPoolStatus(workspaceId: string): Promise<WorkerPoolStatus> {
+  return apiRequest<WorkerPoolStatus>(
+    `/api/workspaces/${workspaceId}/pipelines/workers/status`
+  );
+}
+
+export function fetchStageExecutionAttempts(
+  workspaceId: string,
+  runId: string,
+  stageRunId: string
+): Promise<StageExecutionAttempt[]> {
+  return apiRequest<StageExecutionAttempt[]>(
+    `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/stages/${stageRunId}/attempts`
+  );
+}
+
+export function fetchStageExecutionLogs(
+  workspaceId: string,
+  runId: string,
+  stageRunId: string,
+  params: { attemptNumber?: number; page?: number; size?: number } = {}
+): Promise<PagedResponse<StageExecutionLog>> {
+  const search = new URLSearchParams();
+  if (params.attemptNumber !== undefined) {
+    search.set('attemptNumber', String(params.attemptNumber));
+  }
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<StageExecutionLog>>(
+    `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/stages/${stageRunId}/logs${qs ? `?${qs}` : ''}`
   );
 }
 

@@ -1,6 +1,6 @@
 # CloudForge Local Development Guide
 
-This guide covers setting up, running, testing, migrating, and troubleshooting CloudForge (Phases 1 & 2) on Windows 11 (PowerShell + WSL 2 Docker Desktop), macOS, and Linux.
+This guide covers setting up, running, testing, migrating, and troubleshooting CloudForge (Phases 1–3.3) on Windows 11 (PowerShell + WSL 2 Docker Desktop), macOS, and Linux.
 
 ---
 
@@ -79,13 +79,48 @@ This guide covers setting up, running, testing, migrating, and troubleshooting C
 
 ## 3. Database Migrations (Flyway)
 
-- Migrations live in `backend/src/main/resources/db/migration/` (`V1__phase2_core_schema.sql`, `V2__webhook_deliveries.sql`).
+- Migrations live in `backend/src/main/resources/db/migration/` (`V1__phase2_core_schema.sql`, `V2__webhook_deliveries.sql`, `V3__github_actions_workflows.sql`, `V4__pipeline_orchestration_engine.sql`, `V5__isolated_worker_execution.sql`).
 - Hibernate DDL generation is disabled (`spring.jpa.hibernate.ddl-auto: none` in runtime; `validate` in test profile).
 - **Do not run `docker compose down -v`** unless you explicitly intend to wipe your local PostgreSQL volume. Use `docker compose down` or `docker compose up -d --build` to preserve existing data across restarts.
 - Inspect applied migrations in PostgreSQL:
   ```powershell
   docker exec cloudforge-postgres psql -U cloudforge -d cloudforge -c "SELECT version, description, success, installed_on FROM flyway_schema_history ORDER BY installed_rank;"
   ```
+
+---
+
+## 3.5 Running the Phase 3.3 Host-Side Isolated Worker (Optional Local Dev)
+
+By default, the worker execution plane is **disabled** (`CLOUDFORGE_WORKERS_ENABLED=false`, `CLOUDFORGE_WORKERS_SCHEDULER_ENABLED=false`) and always remains disabled in Render staging (`application-render.yml`). Never mount `/var/run/docker.sock` into the Spring Boot backend container.
+
+To run a trusted host-side isolated Docker worker locally:
+
+1. Generate a high-entropy per-worker token (>= 16 chars) and configure `.env` (never commit `.env`):
+   ```powershell
+   $token = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
+   # Set in .env for the backend control plane:
+   # CLOUDFORGE_WORKERS_ENABLED=true
+   # CLOUDFORGE_WORKERS_SCHEDULER_ENABLED=true
+   # CLOUDFORGE_WORKER_CREDENTIALS=local-docker-worker-1:key-local-1:<paste-token>
+   ```
+2. Restart the Spring Boot backend so it loads the hashed worker credential into memory and enables `/api/internal/workers/**`.
+3. Build the standalone worker executable JAR (`worker/target/cloudforge-worker.jar`):
+   ```powershell
+   cd worker
+   mvn -B clean package
+   ```
+4. Pre-pull the fixed allowlisted minimal executor image (`alpine:3.20`) and launch the host-side worker agent:
+   ```powershell
+   docker pull alpine:3.20
+   $env:CLOUDFORGE_CONTROL_PLANE_URL = "http://127.0.0.1:8080"
+   $env:CLOUDFORGE_WORKER_ID = "local-docker-worker-1"
+   $env:CLOUDFORGE_WORKER_TOKEN = "<paste-token>"
+   $env:CLOUDFORGE_EXECUTOR_IMAGE = "alpine:3.20"
+   java -jar worker/target/cloudforge-worker.jar
+   ```
+5. In the CloudForge UI (`/pipelines` -> **CloudForge Pipelines**), create a pipeline definition using allowlisted Phase 3.3 operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`), click **Queue Run**, and inspect live stage status, attempt history, and bounded sanitized execution logs.
+
+> **Security Warning:** Local Docker daemon access on your workstation is privileged. CloudForge isolates execution containers with `--user 65534:65534`, `--cap-drop=ALL`, `no-new-privileges`, `--read-only`, `--network=none`, and CPU/memory/PID limits, and restricts execution strictly to compile-time allowlisted operations. Do **not** expose local Docker workers to untrusted multi-tenant repository code without microVM/sandbox isolation (e.g. gVisor, Kata Containers, or Firecracker).
 
 ---
 

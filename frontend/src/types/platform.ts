@@ -441,6 +441,13 @@ export interface PipelineStageRun {
   allowFailure: boolean;
   status: PipelineStageStatus;
   statusReason: string | null;
+  allowedOperation?: string | null;
+  executionSupported?: boolean;
+  capabilityMessage?: string | null;
+  assignedWorkerId?: string | null;
+  leaseExpiresAt?: string | null;
+  nextRetryAt?: string | null;
+  cancellationRequestedAt?: string | null;
   readyAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -468,6 +475,7 @@ export interface PipelineRun {
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
+  cancellationRequestedAt?: string | null;
   rowVersion: number | null;
   stages: PipelineStageRun[];
   createdAt: string;
@@ -485,5 +493,104 @@ export interface PipelineRunEvent {
   actorUsername: string | null;
   message: string;
   metadata: Record<string, unknown>;
+  occurredAt: string;
+}
+
+// --- Phase 3.3: Isolated Build Workers & Secure Execution ---
+
+export type AllowedWorkerOperation =
+  | 'ENV_VALIDATION'
+  | 'CONTROLLED_SMOKE_TEST'
+  | 'WORKER_DIAGNOSTICS';
+
+export type WorkerStatus = 'AVAILABLE' | 'BUSY' | 'DRAINING' | 'OFFLINE';
+
+export type WorkerAdapterType = 'DOCKER_ISOLATED' | 'MOCK_TEST';
+
+export type AttemptStatus =
+  | 'CLAIMED'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'TIMED_OUT'
+  | 'CANCELLED'
+  | 'INTERRUPTED'
+  | 'EXPIRED';
+
+export type AttemptFailureCategory =
+  | 'NONE'
+  | 'INFRASTRUCTURE_FAILURE'
+  | 'WORKER_CRASH'
+  | 'LEASE_EXPIRED'
+  | 'EXECUTION_TIMEOUT'
+  | 'OPERATION_FAILURE'
+  | 'CANCELLED'
+  | 'UNSUPPORTED_OPERATION';
+
+export type LogStreamType = 'STDOUT' | 'STDERR' | 'SYSTEM';
+
+export interface WorkerNodeSummary {
+  workerId: string;
+  displayName: string;
+  adapterType: WorkerAdapterType;
+  status: WorkerStatus;
+  supportedOperations: string[];
+  maxConcurrency: number;
+  activeAssignments: number;
+  hostLabel: string | null;
+  agentVersion: string | null;
+  registeredAt: string;
+  lastHeartbeatAt: string;
+  offlineAt: string | null;
+}
+
+export interface WorkerPoolStatus {
+  workerPlaneEnabled: boolean;
+  schedulerEnabled: boolean;
+  registeredWorkers: number;
+  availableWorkers: number;
+  busyWorkers: number;
+  drainingWorkers: number;
+  offlineWorkers: number;
+  activeAssignments: number;
+  workspaceReadyStages: number;
+  workspaceRunningStages: number;
+  workspaceFailedAttempts: number;
+  supportedOperations: string[];
+  workers: WorkerNodeSummary[];
+  sampledAt: string;
+}
+
+export interface StageExecutionAttempt {
+  id: string;
+  stageRunId: string;
+  workerId: string;
+  attemptNumber: number;
+  fencingGeneration: number;
+  allowedOperation: string;
+  status: AttemptStatus;
+  failureCategory: AttemptFailureCategory;
+  exitCode: number | null;
+  summary: string | null;
+  resourceUsage: Record<string, unknown>;
+  leaseStartedAt: string;
+  leaseExpiresAt: string;
+  lastHeartbeatAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancellationRequestedAt: string | null;
+  terminationConfirmed: boolean;
+  recoveredAt: string | null;
+}
+
+export interface StageExecutionLog {
+  id: string;
+  attemptId: string;
+  attemptNumber: number;
+  workerId: string;
+  sequenceNumber: number;
+  streamType: LogStreamType;
+  message: string;
+  truncated: boolean;
   occurredAt: string;
 }

@@ -48,6 +48,12 @@ public class PipelineStageRunEntity extends BaseAuditableEntity {
     @Column(name = "depends_on_json", nullable = false, columnDefinition = "TEXT")
     private String dependsOnJson = "[]";
 
+    @Column(name = "metadata_json", nullable = false, columnDefinition = "TEXT")
+    private String metadataJson = "{}";
+
+    @Column(name = "allowed_operation", length = 64)
+    private String allowedOperation;
+
     @Column(name = "timeout_seconds", nullable = false)
     private int timeoutSeconds = 600;
 
@@ -72,6 +78,18 @@ public class PipelineStageRunEntity extends BaseAuditableEntity {
 
     @Column(name = "lease_expires_at")
     private Instant leaseExpiresAt;
+
+    @Column(name = "active_lease_token", length = 64)
+    private String activeLeaseToken;
+
+    @Column(name = "fencing_generation", nullable = false)
+    private long fencingGeneration = 0L;
+
+    @Column(name = "next_retry_at")
+    private Instant nextRetryAt;
+
+    @Column(name = "cancellation_requested_at")
+    private Instant cancellationRequestedAt;
 
     @Column(name = "ready_at")
     private Instant readyAt;
@@ -103,13 +121,59 @@ public class PipelineStageRunEntity extends BaseAuditableEntity {
             case RUNNING -> {
                 this.startedAt = effectiveTime;
                 this.attemptNumber = this.attemptNumber + 1;
+                this.nextRetryAt = null;
             }
-            case SUCCEEDED, FAILED, SKIPPED, CANCELLED -> this.completedAt = effectiveTime;
+            case SUCCEEDED, FAILED, SKIPPED, CANCELLED -> {
+                this.completedAt = effectiveTime;
+                this.activeLeaseToken = null;
+                this.leaseExpiresAt = null;
+            }
             case PENDING -> {
                 // Initial state; validated unreachable via StageStateMachine
             }
         }
         return previous;
+    }
+
+    /**
+     * Atomically binds a fenced lease when a trusted worker claims a {@code READY} stage.
+     */
+    public long assignLease(String workerId, String leaseToken, Instant leaseExpiresAt, Instant claimedAt, String reason) {
+        this.fencingGeneration = this.fencingGeneration + 1;
+        this.assignedWorkerId = workerId;
+        this.activeLeaseToken = leaseToken;
+        this.leaseExpiresAt = leaseExpiresAt;
+        transitionStatus(PipelineStageStatus.RUNNING, claimedAt, reason);
+        return this.fencingGeneration;
+    }
+
+    public void renewLease(Instant newLeaseExpiresAt) {
+        this.leaseExpiresAt = newLeaseExpiresAt;
+    }
+
+    /**
+     * Re-queues a {@code RUNNING} stage back to {@code READY} with retry backoff after a retryable
+     * attempt failure or expired lease without ever transitioning terminal {@code FAILED} back to {@code RUNNING}.
+     */
+    public void requeueForRetry(Instant now, Instant retryAfter, String reason) {
+        this.fencingGeneration = this.fencingGeneration + 1;
+        this.assignedWorkerId = null;
+        this.activeLeaseToken = null;
+        this.leaseExpiresAt = null;
+        this.nextRetryAt = retryAfter;
+        transitionStatus(PipelineStageStatus.READY, now, reason);
+    }
+
+    public void fenceExpiredLease() {
+        this.fencingGeneration = this.fencingGeneration + 1;
+        this.activeLeaseToken = null;
+        this.leaseExpiresAt = null;
+    }
+
+    public void recordCancellationRequest(Instant requestedAt) {
+        if (this.cancellationRequestedAt == null) {
+            this.cancellationRequestedAt = requestedAt != null ? requestedAt : Instant.now();
+        }
     }
 
     public WorkspaceEntity getWorkspace() {
@@ -168,6 +232,22 @@ public class PipelineStageRunEntity extends BaseAuditableEntity {
         this.dependsOnJson = dependsOnJson;
     }
 
+    public String getMetadataJson() {
+        return metadataJson;
+    }
+
+    public void setMetadataJson(String metadataJson) {
+        this.metadataJson = metadataJson != null ? metadataJson : "{}";
+    }
+
+    public String getAllowedOperation() {
+        return allowedOperation;
+    }
+
+    public void setAllowedOperation(String allowedOperation) {
+        this.allowedOperation = allowedOperation;
+    }
+
     public int getTimeoutSeconds() {
         return timeoutSeconds;
     }
@@ -214,6 +294,22 @@ public class PipelineStageRunEntity extends BaseAuditableEntity {
 
     public Instant getLeaseExpiresAt() {
         return leaseExpiresAt;
+    }
+
+    public String getActiveLeaseToken() {
+        return activeLeaseToken;
+    }
+
+    public long getFencingGeneration() {
+        return fencingGeneration;
+    }
+
+    public Instant getNextRetryAt() {
+        return nextRetryAt;
+    }
+
+    public Instant getCancellationRequestedAt() {
+        return cancellationRequestedAt;
     }
 
     public Instant getReadyAt() {

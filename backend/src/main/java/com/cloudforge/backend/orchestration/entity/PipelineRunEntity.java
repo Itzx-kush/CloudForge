@@ -92,6 +92,12 @@ public class PipelineRunEntity extends BaseAuditableEntity {
     @Column(name = "cancelled_at")
     private Instant cancelledAt;
 
+    @Column(name = "cancellation_requested_at")
+    private Instant cancellationRequestedAt;
+
+    @Column(name = "cancellation_reason", length = 500)
+    private String cancellationReason;
+
     @Version
     @Column(name = "row_version", nullable = false)
     private Long rowVersion = 0L;
@@ -257,6 +263,24 @@ public class PipelineRunEntity extends BaseAuditableEntity {
 
     public Instant getCancelledAt() {
         return cancelledAt;
+    }
+
+    public Instant getCancellationRequestedAt() {
+        return cancellationRequestedAt;
+    }
+
+    public String getCancellationReason() {
+        return cancellationReason;
+    }
+
+    public void recordCancellationRequest(Instant requestedAt, String reason, UserEntity actor) {
+        if (this.cancellationRequestedAt == null) {
+            this.cancellationRequestedAt = requestedAt != null ? requestedAt : Instant.now();
+            this.cancellationReason = truncate(reason, 500);
+            if (actor != null) {
+                this.cancelledBy = actor;
+            }
+        }
     }
 
     public Long getRowVersion() {
