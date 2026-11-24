@@ -10,6 +10,7 @@ import com.cloudforge.backend.entity.WorkspaceMemberEntity;
 import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.exception.ConflictException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.oci.service.BuildRequestValidator;
 import com.cloudforge.backend.orchestration.dto.CreatePipelineDefinitionRequest;
 import com.cloudforge.backend.orchestration.dto.PipelineDefinitionDto;
 import com.cloudforge.backend.orchestration.dto.PipelineStageDefinitionDto;
@@ -70,6 +71,7 @@ public class PipelineDefinitionService {
     private final PipelineDefinitionRepository definitionRepository;
     private final PipelineStageDefinitionRepository stageDefinitionRepository;
     private final StageDagValidator dagValidator;
+    private final BuildRequestValidator buildRequestValidator;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
 
@@ -85,6 +87,7 @@ public class PipelineDefinitionService {
             PipelineDefinitionRepository definitionRepository,
             PipelineStageDefinitionRepository stageDefinitionRepository,
             StageDagValidator dagValidator,
+            BuildRequestValidator buildRequestValidator,
             AuditService auditService,
             ObjectMapper objectMapper
     ) {
@@ -99,6 +102,7 @@ public class PipelineDefinitionService {
         this.definitionRepository = definitionRepository;
         this.stageDefinitionRepository = stageDefinitionRepository;
         this.dagValidator = dagValidator;
+        this.buildRequestValidator = buildRequestValidator;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
     }
@@ -156,6 +160,7 @@ public class PipelineDefinitionService {
         LinkedRepositoryEntity repository = resolveRepository(workspaceId, request.linkedRepositoryId(), project);
         ProjectEnvironmentEntity targetEnvironment = resolveTargetEnvironment(project.getId(), request.targetEnvironmentId());
         StageDagValidator.ValidatedStageGraph validatedGraph = validateStageRequests(request.stages());
+        validateOciStageConfigurations(workspaceId, validatedGraph);
         Map<String, List<StageSecretBindingDto>> resolvedBindingsByStage = validateAndResolveSecretBindings(
                 workspaceId,
                 project,
@@ -256,6 +261,7 @@ public class PipelineDefinitionService {
         ProjectEnvironmentEntity targetEnvironment = resolveTargetEnvironment(project.getId(), request.targetEnvironmentId());
 
         StageDagValidator.ValidatedStageGraph validatedGraph = validateStageRequests(request.stages());
+        validateOciStageConfigurations(workspaceId, validatedGraph);
         Map<String, List<StageSecretBindingDto>> resolvedBindingsByStage = validateAndResolveSecretBindings(
                 workspaceId,
                 project,
@@ -355,6 +361,20 @@ public class PipelineDefinitionService {
         return dagValidator.validateAndSort(inputs);
     }
 
+    private void validateOciStageConfigurations(
+            UUID workspaceId,
+            StageDagValidator.ValidatedStageGraph validatedGraph
+    ) {
+        for (StageDagValidator.ValidatedStageSpec spec : validatedGraph.orderedStages()) {
+            AllowedWorkerOperation op = AllowedWorkerOperation.resolveForStage(spec.stageType(), spec.metadata()).orElse(null);
+            if (op == AllowedWorkerOperation.OCI_IMAGE_BUILD) {
+                buildRequestValidator.validateBuildStageConfig(workspaceId, spec.stageKey(), spec.metadata(), spec.timeoutSeconds());
+            } else if (op == AllowedWorkerOperation.OCI_IMAGE_PUBLISH) {
+                buildRequestValidator.validatePublishStageConfig(workspaceId, spec.stageKey(), spec.metadata());
+            }
+        }
+    }
+
     private List<PipelineStageDefinitionEntity> persistStages(
             PipelineDefinitionEntity definition,
             List<StageDagValidator.ValidatedStageSpec> orderedStages,
@@ -438,7 +458,9 @@ public class PipelineDefinitionService {
             Optional<AllowedWorkerOperation> operation = AllowedWorkerOperation.resolveForStage(
                     stageSpec.stageType(), stageSpec.metadata()
             );
-            if (operation.isEmpty() || operation.get() == AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE) {
+            if (operation.isEmpty()
+                    || operation.get() == AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE
+                    || operation.get().isOciOperation()) {
                 throw new BadRequestException(
                         "Stage \"" + stageSpec.stageKey() + "\" (" + stageSpec.stageType()
                                 + ") cannot bind encrypted secrets without an approved Phase 3.4 worker operation"

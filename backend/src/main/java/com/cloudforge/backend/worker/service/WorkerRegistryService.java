@@ -81,10 +81,22 @@ public class WorkerRegistryService {
 
         List<String> normalizedOps = validateSupportedOperations(request.supportedOperations());
         String sourceOperation = AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE.name();
+        String ociBuildOp = AllowedWorkerOperation.OCI_IMAGE_BUILD.name();
+        String ociPublishOp = AllowedWorkerOperation.OCI_IMAGE_PUBLISH.name();
+        boolean advertisesOci = normalizedOps.contains(ociBuildOp) || normalizedOps.contains(ociPublishOp);
         if (request.adapterType() == WorkerAdapterType.GITHUB_SOURCE
                 ? !normalizedOps.equals(List.of(sourceOperation)) || request.maxConcurrency() != 1
                 : normalizedOps.contains(sourceOperation)) {
             throw new BadRequestException("GitHub source acquisition requires a dedicated source worker");
+        }
+        if (request.adapterType() == WorkerAdapterType.OCI_BUILDKIT) {
+            boolean onlyOciOps = !normalizedOps.isEmpty() && normalizedOps.stream()
+                    .allMatch(op -> op.equals(ociBuildOp) || op.equals(ociPublishOp));
+            if (!onlyOciOps || request.maxConcurrency() > 2) {
+                throw new BadRequestException("OCI_BUILDKIT workers may only advertise OCI_IMAGE_BUILD / OCI_IMAGE_PUBLISH with maxConcurrency <= 2");
+            }
+        } else if (advertisesOci) {
+            throw new BadRequestException("OCI build and publish operations require a dedicated OCI_BUILDKIT worker");
         }
         Instant now = Instant.now();
 

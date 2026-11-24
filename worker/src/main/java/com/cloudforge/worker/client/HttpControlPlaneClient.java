@@ -9,6 +9,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -19,7 +20,7 @@ import java.util.UUID;
 /**
  * Stateless Java 17 HTTP client communicating strictly with CloudForge's authenticated
  * {@code /api/internal/workers/**} control-plane endpoints using per-worker credentials.
- * Never logs worker bearer tokens.
+ * Never logs worker bearer tokens or registry credentials.
  */
 public class HttpControlPlaneClient implements ControlPlaneClient {
 
@@ -33,6 +34,7 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
         this.config = config;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
@@ -126,6 +128,199 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
         return grant == null ? null : grant.downloadUrl();
     }
 
+    @Override
+    public HandoffUploadResult uploadSourceHandoff(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path zipFile,
+            String contentSha256,
+            int fileCount,
+            long extractedBytes
+    ) {
+        String path = "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/source-handoff";
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(config.controlPlaneBaseUrl() + path))
+                    .timeout(Duration.ofSeconds(60))
+                    .header(WORKER_ID_HEADER, config.workerId())
+                    .header("Authorization", "Bearer " + config.workerToken())
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/octet-stream")
+                    .header("X-CloudForge-Lease-Token", leaseToken)
+                    .header("X-CloudForge-Fencing-Generation", String.valueOf(fencingGeneration))
+                    .header("X-CloudForge-Content-Sha256", contentSha256)
+                    .header("X-CloudForge-File-Count", String.valueOf(fileCount))
+                    .header("X-CloudForge-Extracted-Bytes", String.valueOf(extractedBytes))
+                    .POST(HttpRequest.BodyPublishers.ofFile(zipFile))
+                    .build();
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                return objectMapper.readValue(resp.body(), HandoffUploadResult.class);
+            }
+            throw new IllegalStateException("Source handoff upload failed with HTTP " + resp.statusCode());
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Source handoff upload error: " + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public OciExecutionDescriptor fetchOciDescriptor(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        return postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/oci-descriptor",
+                Map.of("leaseToken", leaseToken, "fencingGeneration", fencingGeneration),
+                OciExecutionDescriptor.class
+        );
+    }
+
+    @Override
+    public DownloadedHandoff downloadBuildContext(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path destinationFile
+    ) {
+        return downloadHandoffBinary(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/build-context",
+                leaseToken,
+                fencingGeneration,
+                destinationFile
+        );
+    }
+
+    @Override
+    public HandoffUploadResult uploadOciLayout(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path ociTarFile,
+            String contentSha256,
+            long imageSizeBytes
+    ) {
+        String path = "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/oci-layout-upload";
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(config.controlPlaneBaseUrl() + path))
+                    .timeout(Duration.ofSeconds(120))
+                    .header(WORKER_ID_HEADER, config.workerId())
+                    .header("Authorization", "Bearer " + config.workerToken())
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/octet-stream")
+                    .header("X-CloudForge-Lease-Token", leaseToken)
+                    .header("X-CloudForge-Fencing-Generation", String.valueOf(fencingGeneration))
+                    .header("X-CloudForge-Content-Sha256", contentSha256)
+                    .header("X-CloudForge-Image-Size-Bytes", String.valueOf(imageSizeBytes))
+                    .POST(HttpRequest.BodyPublishers.ofFile(ociTarFile))
+                    .build();
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                return objectMapper.readValue(resp.body(), HandoffUploadResult.class);
+            }
+            throw new IllegalStateException("OCI layout upload failed with HTTP " + resp.statusCode());
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("OCI layout upload error: " + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public DownloadedHandoff downloadOciLayout(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path destinationFile
+    ) {
+        return downloadHandoffBinary(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/oci-layout-download",
+                leaseToken,
+                fencingGeneration,
+                destinationFile
+        );
+    }
+
+    @Override
+    public void reportOciBuildResult(String workerId, UUID attemptId, OciBuildResultPayload payload) {
+        postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/build-result",
+                payload,
+                Void.class
+        );
+    }
+
+    @Override
+    public RegistryCredentialResult fetchRegistryCredentials(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        return postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/registry-credentials",
+                Map.of("leaseToken", leaseToken, "fencingGeneration", fencingGeneration),
+                RegistryCredentialResult.class
+        );
+    }
+
+    @Override
+    public void reportOciPublishResult(String workerId, UUID attemptId, OciPublishResultPayload payload) {
+        postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/publish-result",
+                payload,
+                Void.class
+        );
+    }
+
+    private DownloadedHandoff downloadHandoffBinary(
+            String path,
+            String leaseToken,
+            long fencingGeneration,
+            Path destinationFile
+    ) {
+        try {
+            String json = objectMapper.writeValueAsString(
+                    Map.of("leaseToken", leaseToken, "fencingGeneration", fencingGeneration)
+            );
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(config.controlPlaneBaseUrl() + path))
+                    .timeout(Duration.ofSeconds(120))
+                    .header(WORKER_ID_HEADER, config.workerId())
+                    .header("Authorization", "Bearer " + config.workerToken())
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/octet-stream")
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+            HttpResponse<Path> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofFile(destinationFile));
+            if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+                throw new IllegalStateException("Handoff download POST " + path + " failed with HTTP " + resp.statusCode());
+            }
+            String handoffId = resp.headers().firstValue("X-CloudForge-Handoff-Id").orElse(null);
+            String sha256 = resp.headers().firstValue("X-CloudForge-Content-Sha256").orElse(null);
+            String commitSha = resp.headers().firstValue("X-CloudForge-Commit-Sha").orElse(null);
+            return new DownloadedHandoff(
+                    handoffId != null ? UUID.fromString(handoffId) : null,
+                    sha256,
+                    commitSha,
+                    destinationFile
+            );
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Handoff download error: " + ex.getMessage(), ex);
+        }
+    }
+
     private record ArchiveGrant(URI downloadUrl) {
         @Override
         public String toString() {
@@ -200,7 +395,9 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
     }
 
     private static boolean isSensitiveResponse(String path) {
-        return path.endsWith("/secrets") || path.endsWith("/source-archive");
+        return path.endsWith("/secrets")
+                || path.endsWith("/source-archive")
+                || path.endsWith("/registry-credentials");
     }
 
     private HttpRequest authorizedPost(String path, String jsonBody) {

@@ -1,6 +1,7 @@
 package com.cloudforge.worker.client;
 
 import java.net.URI;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,77 @@ public interface ControlPlaneClient {
 
     default URI fetchSourceArchive(String workerId, UUID attemptId, String leaseToken, long fencingGeneration) {
         throw new UnsupportedOperationException("GitHub source acquisition is unavailable");
+    }
+
+    default HandoffUploadResult uploadSourceHandoff(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path zipFile,
+            String contentSha256,
+            int fileCount,
+            long extractedBytes
+    ) {
+        throw new UnsupportedOperationException("Source handoff upload is unavailable");
+    }
+
+    default OciExecutionDescriptor fetchOciDescriptor(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        throw new UnsupportedOperationException("OCI execution descriptor fetch is unavailable");
+    }
+
+    default DownloadedHandoff downloadBuildContext(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path destinationFile
+    ) {
+        throw new UnsupportedOperationException("OCI build context download is unavailable");
+    }
+
+    default HandoffUploadResult uploadOciLayout(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path ociTarFile,
+            String contentSha256,
+            long imageSizeBytes
+    ) {
+        throw new UnsupportedOperationException("OCI layout upload is unavailable");
+    }
+
+    default DownloadedHandoff downloadOciLayout(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration,
+            Path destinationFile
+    ) {
+        throw new UnsupportedOperationException("OCI layout download is unavailable");
+    }
+
+    default void reportOciBuildResult(String workerId, UUID attemptId, OciBuildResultPayload payload) {
+        throw new UnsupportedOperationException("OCI build result reporting is unavailable");
+    }
+
+    default RegistryCredentialResult fetchRegistryCredentials(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        throw new UnsupportedOperationException("OCI registry credential delivery is unavailable");
+    }
+
+    default void reportOciPublishResult(String workerId, UUID attemptId, OciPublishResultPayload payload) {
+        throw new UnsupportedOperationException("OCI publish result reporting is unavailable");
     }
 
     void appendLogs(String workerId, UUID attemptId, String leaseToken, long fencingGeneration, List<LogEntry> entries);
@@ -101,8 +173,32 @@ public interface ControlPlaneClient {
             int maxLogLines,
             int maxLogBytes,
             boolean hasSecretBindings,
-            List<String> secretAliases
+            List<String> secretAliases,
+            boolean sourceHandoffRequired
     ) {
+        public ClaimedStageLease(
+                StageInfo stage,
+                UUID attemptId,
+                String workerId,
+                String leaseToken,
+                long fencingGeneration,
+                String allowedOperation,
+                boolean idempotentOperation,
+                Instant leaseStartedAt,
+                Instant leaseExpiresAt,
+                int heartbeatIntervalSeconds,
+                int maxLogLines,
+                int maxLogBytes,
+                boolean hasSecretBindings,
+                List<String> secretAliases
+        ) {
+            this(
+                    stage, attemptId, workerId, leaseToken, fencingGeneration, allowedOperation,
+                    idempotentOperation, leaseStartedAt, leaseExpiresAt, heartbeatIntervalSeconds,
+                    maxLogLines, maxLogBytes, hasSecretBindings, secretAliases, false
+            );
+        }
+
         public ClaimedStageLease(
                 StageInfo stage,
                 UUID attemptId,
@@ -118,20 +214,9 @@ public interface ControlPlaneClient {
                 int maxLogBytes
         ) {
             this(
-                    stage,
-                    attemptId,
-                    workerId,
-                    leaseToken,
-                    fencingGeneration,
-                    allowedOperation,
-                    idempotentOperation,
-                    leaseStartedAt,
-                    leaseExpiresAt,
-                    heartbeatIntervalSeconds,
-                    maxLogLines,
-                    maxLogBytes,
-                    false,
-                    List.of()
+                    stage, attemptId, workerId, leaseToken, fencingGeneration, allowedOperation,
+                    idempotentOperation, leaseStartedAt, leaseExpiresAt, heartbeatIntervalSeconds,
+                    maxLogLines, maxLogBytes, false, List.of(), false
             );
         }
     }
@@ -164,6 +249,110 @@ public interface ControlPlaneClient {
             return "SecretDeliveryResult[attemptId=" + attemptId
                     + ", count=" + (secrets == null ? 0 : secrets.size()) + ", secrets=[REDACTED]]";
         }
+    }
+
+    record HandoffUploadResult(
+            UUID handoffId,
+            String handoffType,
+            String contentChecksumSha256,
+            long archiveSizeBytes,
+            long extractedBytes,
+            int fileCount,
+            Instant expiresAt
+    ) {
+    }
+
+    record DownloadedHandoff(
+            UUID handoffId,
+            String contentChecksumSha256,
+            String commitSha,
+            Path file
+    ) {
+    }
+
+    record OciExecutionDescriptor(
+            UUID buildRecordId,
+            UUID publishAttemptId,
+            UUID workspaceId,
+            UUID projectId,
+            UUID pipelineRunId,
+            UUID stageRunId,
+            UUID attemptId,
+            String operation,
+            long githubRepositoryId,
+            String repositoryFullName,
+            String commitSha,
+            String dockerfilePath,
+            String buildContextPath,
+            String targetImageName,
+            String targetTag,
+            String targetPlatform,
+            String buildMode,
+            Map<String, String> buildArgs,
+            String cpuLimit,
+            String memoryLimit,
+            int timeoutSeconds,
+            String configChecksumSha256,
+            UUID sourceHandoffId,
+            String expectedSourceSha256,
+            UUID ociHandoffId,
+            String expectedOciLayoutSha256,
+            String expectedManifestDigest,
+            UUID registryConnectionId,
+            String registryHost,
+            String registryScheme,
+            String allowedNamespace,
+            boolean allowInsecureLocalRegistry,
+            boolean hasRegistryCredentials
+    ) {
+    }
+
+    record RegistryCredentialResult(
+            UUID attemptId,
+            UUID registryConnectionId,
+            String registryHost,
+            String scheme,
+            String username,
+            String password,
+            boolean anonymous,
+            Instant deliveredAt
+    ) {
+        @Override
+        public String toString() {
+            return "RegistryCredentialResult[attemptId=" + attemptId
+                    + ", registryHost=" + registryHost + ", credentials=[REDACTED]]";
+        }
+    }
+
+    record OciBuildResultPayload(
+            String leaseToken,
+            long fencingGeneration,
+            String status,
+            String builtManifestDigest,
+            String imageMediaType,
+            Long imageSizeBytes,
+            UUID ociHandoffId,
+            String failureCategory,
+            String errorSummary,
+            Instant startedAt,
+            Instant completedAt
+    ) {
+    }
+
+    record OciPublishResultPayload(
+            String leaseToken,
+            long fencingGeneration,
+            String status,
+            String reportedDigest,
+            String verifiedDigest,
+            String imageMediaType,
+            String platform,
+            Long imageSizeBytes,
+            boolean verified,
+            String failureCategory,
+            String errorSummary,
+            Instant completedAt
+    ) {
     }
 
     record LogEntry(String streamType, String message, Instant occurredAt) {

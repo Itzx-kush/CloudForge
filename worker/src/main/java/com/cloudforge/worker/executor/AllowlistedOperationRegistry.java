@@ -17,8 +17,8 @@ public final class AllowlistedOperationRegistry {
                     "/bin/sh", "-eu", "-c",
                     "echo '[ENV_VALIDATION] Starting isolated container environment validation';"
                             + "UID_VAL=$(id -u); GID_VAL=$(id -g);"
-                            + "echo \"[ENV_VALIDATION] uid=${UID_VAL} gid=${GID_VAL}\";"
-                            + "if [ \"${UID_VAL}\" = \"0\" ]; then echo '[ENV_VALIDATION] ERROR: running as root' >&2; exit 11; fi;"
+                            + "printf '[ENV_VALIDATION] uid=%s gid=%s\\n' ${UID_VAL} ${GID_VAL};"
+                            + "if [ ${UID_VAL} = 0 ]; then echo '[ENV_VALIDATION] ERROR: running as root' >&2; exit 11; fi;"
                             + "if touch /cf-ro-probe 2>/dev/null; then echo '[ENV_VALIDATION] ERROR: rootfs is writable' >&2; exit 12; fi;"
                             + "echo '[ENV_VALIDATION] Read-only root filesystem verified';"
                             + "echo 'ok' > /tmp/cf-tmp-probe && rm -f /tmp/cf-tmp-probe;"
@@ -31,16 +31,16 @@ public final class AllowlistedOperationRegistry {
                             + "printf '[CONTROLLED_SMOKE_TEST] UTF-8 check: CloudForge — Phase 3.3 ✓\\n';"
                             + "echo '[CONTROLLED_SMOKE_TEST] STDERR stream check' >&2;"
                             + "CHECK_SUM=$(printf 'cloudforge-phase3-3-smoke' | sha256sum | cut -d' ' -f1);"
-                            + "echo \"[CONTROLLED_SMOKE_TEST] deterministic_sha256=${CHECK_SUM}\";"
+                            + "printf '[CONTROLLED_SMOKE_TEST] deterministic_sha256=%s\\n' ${CHECK_SUM};"
                             + "echo '[CONTROLLED_SMOKE_TEST] Smoke test passed'"
             ),
             "WORKER_DIAGNOSTICS", List.of(
                     "/bin/sh", "-eu", "-c",
                     "echo '[WORKER_DIAGNOSTICS] Starting isolated worker diagnostics';"
-                            + "echo \"[WORKER_DIAGNOSTICS] kernel=$(uname -s) arch=$(uname -m) uid=$(id -u)\";"
-                            + "echo \"[WORKER_DIAGNOSTICS] hostname=$(hostname)\";"
-                            + "if [ -r /sys/fs/cgroup/memory.max ]; then echo \"[WORKER_DIAGNOSTICS] cgroup_memory_max=$(cat /sys/fs/cgroup/memory.max)\"; fi;"
-                            + "if [ -r /sys/fs/cgroup/pids.max ]; then echo \"[WORKER_DIAGNOSTICS] cgroup_pids_max=$(cat /sys/fs/cgroup/pids.max)\"; fi;"
+                            + "printf '[WORKER_DIAGNOSTICS] kernel=%s arch=%s uid=%s\\n' $(uname -s) $(uname -m) $(id -u);"
+                            + "printf '[WORKER_DIAGNOSTICS] hostname=%s\\n' $(hostname);"
+                            + "if [ -r /sys/fs/cgroup/memory.max ]; then printf '[WORKER_DIAGNOSTICS] cgroup_memory_max=%s\\n' $(cat /sys/fs/cgroup/memory.max); fi;"
+                            + "if [ -r /sys/fs/cgroup/pids.max ]; then printf '[WORKER_DIAGNOSTICS] cgroup_pids_max=%s\\n' $(cat /sys/fs/cgroup/pids.max); fi;"
                             + "if [ -e /var/run/docker.sock ]; then echo '[WORKER_DIAGNOSTICS] ERROR: docker.sock exposed!' >&2; exit 13; fi;"
                             + "echo '[WORKER_DIAGNOSTICS] Verified no Docker socket present inside container';"
                             + "echo '[WORKER_DIAGNOSTICS] Diagnostics complete'"

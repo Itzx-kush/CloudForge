@@ -8,6 +8,7 @@ import type {
   CreatePipelineDefinitionInput,
   CreatePipelineRunInput,
   CreateProjectInput,
+  CreateRegistryConnectionInput,
   EnvironmentSecretDetail,
   EnvironmentSecretSummary,
   EnvironmentSecretVersion,
@@ -18,10 +19,18 @@ import type {
   GitHubWorkflow,
   GitHubWorkflowRun,
   LinkedRepository,
+  OciArtifactVerificationStatus,
+  OciBuildRecord,
+  OciBuildStatus,
+  OciImageArtifact,
+  OciImageArtifactDetail,
+  OciRegistryConnection,
+  OciSubsystemStatus,
   PagedResponse,
   PipelineDefinition,
   PipelineOverview,
   PipelineRun,
+  PipelineRunArtifacts,
   PipelineRunEvent,
   PipelineRunStatus,
   ProjectDetail,
@@ -833,6 +842,98 @@ export function fetchAuditEvents(
   const qs = search.toString();
   return apiRequest<PagedResponse<AuditEvent>>(
     `/api/workspaces/${workspaceId}/audit-events${qs ? `?${qs}` : ''}`
+  );
+}
+
+// --- Phase 3.5B: OCI Registries, Container Builds & Immutable Image Artifacts ---
+
+export function fetchOciSubsystemStatus(workspaceId: string): Promise<OciSubsystemStatus> {
+  return apiRequest<OciSubsystemStatus>(`/api/workspaces/${workspaceId}/oci/status`);
+}
+
+export function fetchOciRegistries(workspaceId: string): Promise<OciRegistryConnection[]> {
+  return apiRequest<OciRegistryConnection[]>(`/api/workspaces/${workspaceId}/registries`);
+}
+
+export function createOciRegistry(
+  workspaceId: string,
+  input: CreateRegistryConnectionInput
+): Promise<OciRegistryConnection> {
+  return apiRequest<OciRegistryConnection>(`/api/workspaces/${workspaceId}/registries`, {
+    method: 'POST',
+    body: input,
+  });
+}
+
+export function disableOciRegistry(
+  workspaceId: string,
+  registryId: string
+): Promise<OciRegistryConnection> {
+  return apiRequest<OciRegistryConnection>(
+    `/api/workspaces/${workspaceId}/registries/${registryId}/disable`,
+    { method: 'POST' }
+  );
+}
+
+export function fetchOciBuilds(
+  workspaceId: string,
+  params: {
+    projectId?: string;
+    status?: OciBuildStatus | '';
+    q?: string;
+    page?: number;
+    size?: number;
+  } = {}
+): Promise<PagedResponse<OciBuildRecord>> {
+  const search = new URLSearchParams();
+  if (params.projectId) search.set('projectId', params.projectId);
+  if (params.status) search.set('status', params.status);
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<OciBuildRecord>>(
+    `/api/workspaces/${workspaceId}/builds${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function fetchOciArtifacts(
+  workspaceId: string,
+  params: {
+    projectId?: string;
+    verificationStatus?: OciArtifactVerificationStatus | '';
+    q?: string;
+    page?: number;
+    size?: number;
+  } = {}
+): Promise<PagedResponse<OciImageArtifact>> {
+  const search = new URLSearchParams();
+  if (params.projectId) search.set('projectId', params.projectId);
+  if (params.verificationStatus) search.set('verificationStatus', params.verificationStatus);
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<OciImageArtifact>>(
+    `/api/workspaces/${workspaceId}/artifacts${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function fetchOciArtifactDetail(
+  workspaceId: string,
+  artifactId: string
+): Promise<OciImageArtifactDetail> {
+  return apiRequest<OciImageArtifactDetail>(
+    `/api/workspaces/${workspaceId}/artifacts/${artifactId}`
+  );
+}
+
+export function fetchPipelineRunArtifacts(
+  workspaceId: string,
+  runId: string
+): Promise<PipelineRunArtifacts> {
+  return apiRequest<PipelineRunArtifacts>(
+    `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/artifacts`
   );
 }
 

@@ -1,6 +1,7 @@
 package com.cloudforge.backend.worker.service;
 
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.oci.config.OciBuildProperties;
 import com.cloudforge.backend.orchestration.engine.WorkerAssignmentContract;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEntity;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEventEntity;
@@ -64,6 +65,7 @@ public class WorkerSchedulerService {
     private final PipelineRunSecretReferenceRepository secretReferenceRepository;
     private final AuditService auditService;
     private final ProjectSourceService sourceService;
+    private final OciBuildProperties ociBuildProperties;
     private final ObjectMapper objectMapper;
 
     public WorkerSchedulerService(
@@ -77,6 +79,7 @@ public class WorkerSchedulerService {
             PipelineRunSecretReferenceRepository secretReferenceRepository,
             AuditService auditService,
             ProjectSourceService sourceService,
+            OciBuildProperties ociBuildProperties,
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
@@ -89,6 +92,7 @@ public class WorkerSchedulerService {
         this.secretReferenceRepository = secretReferenceRepository;
         this.auditService = auditService;
         this.sourceService = sourceService;
+        this.ociBuildProperties = ociBuildProperties;
         this.objectMapper = objectMapper;
     }
 
@@ -134,6 +138,12 @@ public class WorkerSchedulerService {
                 .filter(op -> !AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE.name().equals(op)
                         || (worker.getAdapterType() == WorkerAdapterType.GITHUB_SOURCE
                         && sourceService.permitsWorker(worker.getWorkerId())))
+                .filter(op -> {
+                    AllowedWorkerOperation parsed = AllowedWorkerOperation.parseStrict(op).orElse(null);
+                    return parsed == null || !parsed.isOciOperation()
+                            || (worker.getAdapterType() == WorkerAdapterType.OCI_BUILDKIT
+                            && ociBuildProperties.permitsBuildWorker(worker.getWorkerId()));
+                })
                 .toList();
         if (supportedOperations.isEmpty()) {
             return Optional.empty();
@@ -324,6 +334,11 @@ public class WorkerSchedulerService {
                         .toList()
                 : List.of();
 
+        boolean sourceHandoffRequired = operation == AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE
+                && ociBuildProperties.isEnabled()
+                && stageRunRepository.findAllByPipelineRunIdOrderByExecutionOrderAsc(run.getId()).stream()
+                        .anyMatch(s -> AllowedWorkerOperation.OCI_IMAGE_BUILD.name().equals(s.getAllowedOperation()));
+
         return Optional.of(new WorkerAssignmentContract.LeasedStageWork(
                 descriptor,
                 savedAttempt.getId(),
@@ -338,7 +353,8 @@ public class WorkerSchedulerService {
                 workerProperties.getMaxLogLinesPerAttempt(),
                 workerProperties.getMaxLogBytesPerAttempt(),
                 stage.isHasSecretBindings() && !secretAliases.isEmpty(),
-                secretAliases
+                secretAliases,
+                sourceHandoffRequired
         ));
     }
 

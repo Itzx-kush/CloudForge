@@ -31,7 +31,7 @@ public class StageDagValidator {
     public static final int MIN_TIMEOUT_SECONDS = 30;
     public static final int MAX_TIMEOUT_SECONDS = 7200;
     public static final int MAX_RETRIES = 5;
-    public static final int MAX_METADATA_ENTRIES = 15;
+    public static final int MAX_METADATA_ENTRIES = 20;
     public static final int MAX_METADATA_VALUE_LENGTH = 250;
 
     private static final Pattern STAGE_KEY_PATTERN = Pattern.compile("^[a-z][a-z0-9_-]{1,63}$");
@@ -205,7 +205,61 @@ public class StageDagValidator {
             );
         }
 
+        validateOciStageAncestry(ordered);
+
         return new ValidatedStageGraph(List.copyOf(ordered));
+    }
+
+    private void validateOciStageAncestry(List<ValidatedStageSpec> ordered) {
+        Map<String, ValidatedStageSpec> specByKey = new HashMap<>();
+        for (ValidatedStageSpec spec : ordered) {
+            specByKey.put(spec.stageKey(), spec);
+        }
+        for (ValidatedStageSpec spec : ordered) {
+            AllowedWorkerOperation op = AllowedWorkerOperation.resolveForStage(spec.stageType(), spec.metadata()).orElse(null);
+            if (op == AllowedWorkerOperation.OCI_IMAGE_BUILD) {
+                if (!hasUpstreamOperation(spec.stageKey(), specByKey, AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE)) {
+                    throw new BadRequestException(
+                            "Stage \"" + spec.stageKey() + "\" (OCI_IMAGE_BUILD) must depend directly or transitively on a SOURCE_PREP stage with GITHUB_SOURCE_ACQUIRE",
+                            Map.of("stages", "OCI_IMAGE_BUILD requires an upstream GITHUB_SOURCE_ACQUIRE stage")
+                    );
+                }
+            } else if (op == AllowedWorkerOperation.OCI_IMAGE_PUBLISH) {
+                if (!hasUpstreamOperation(spec.stageKey(), specByKey, AllowedWorkerOperation.OCI_IMAGE_BUILD)) {
+                    throw new BadRequestException(
+                            "Stage \"" + spec.stageKey() + "\" (OCI_IMAGE_PUBLISH) must depend directly or transitively on a BUILD stage with OCI_IMAGE_BUILD",
+                            Map.of("stages", "OCI_IMAGE_PUBLISH requires an upstream OCI_IMAGE_BUILD stage")
+                    );
+                }
+            }
+        }
+    }
+
+    private boolean hasUpstreamOperation(
+            String stageKey,
+            Map<String, ValidatedStageSpec> specByKey,
+            AllowedWorkerOperation requiredOp
+    ) {
+        Set<String> visited = new LinkedHashSet<>();
+        List<String> queue = new ArrayList<>(specByKey.get(stageKey).dependsOn());
+        while (!queue.isEmpty()) {
+            String depKey = queue.remove(0);
+            if (!visited.add(depKey)) {
+                continue;
+            }
+            ValidatedStageSpec depSpec = specByKey.get(depKey);
+            if (depSpec == null) {
+                continue;
+            }
+            AllowedWorkerOperation depOp = AllowedWorkerOperation
+                    .resolveForStage(depSpec.stageType(), depSpec.metadata())
+                    .orElse(null);
+            if (depOp == requiredOp) {
+                return true;
+            }
+            queue.addAll(depSpec.dependsOn());
+        }
+        return false;
     }
 
     private List<String> normalizeDependencies(

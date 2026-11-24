@@ -529,11 +529,17 @@ export type AllowedWorkerOperation =
   | 'ENV_VALIDATION'
   | 'CONTROLLED_SMOKE_TEST'
   | 'WORKER_DIAGNOSTICS'
-  | 'GITHUB_SOURCE_ACQUIRE';
+  | 'GITHUB_SOURCE_ACQUIRE'
+  | 'OCI_IMAGE_BUILD'
+  | 'OCI_IMAGE_PUBLISH';
 
 export type WorkerStatus = 'AVAILABLE' | 'BUSY' | 'DRAINING' | 'OFFLINE';
 
-export type WorkerAdapterType = 'DOCKER_ISOLATED' | 'GITHUB_SOURCE' | 'MOCK_TEST';
+export type WorkerAdapterType =
+  | 'DOCKER_ISOLATED'
+  | 'GITHUB_SOURCE'
+  | 'OCI_BUILDKIT'
+  | 'MOCK_TEST';
 
 export type AttemptStatus =
   | 'CLAIMED'
@@ -553,7 +559,13 @@ export type AttemptFailureCategory =
   | 'EXECUTION_TIMEOUT'
   | 'OPERATION_FAILURE'
   | 'CANCELLED'
-  | 'UNSUPPORTED_OPERATION';
+  | 'UNSUPPORTED_OPERATION'
+  | 'DOCKERFILE_POLICY_VIOLATION'
+  | 'SOURCE_CONTEXT_INVALID'
+  | 'BUILD_FAILED'
+  | 'REGISTRY_AUTH_FAILED'
+  | 'REGISTRY_UNAVAILABLE'
+  | 'DIGEST_VERIFICATION_FAILED';
 
 export type LogStreamType = 'STDOUT' | 'STDERR' | 'SYSTEM';
 
@@ -701,4 +713,197 @@ export interface RotateEnvironmentSecretInput {
 export interface RevokeEnvironmentSecretInput {
   versionNumber?: number;
   reason?: string;
+}
+
+// --- Phase 3.5B: OCI Container Builds, Registry Connections & Immutable Artifacts ---
+
+export type OciRegistryType = 'OCI_GENERIC' | 'GHCR' | 'LOCAL_DEV';
+export type OciRegistryStatus = 'ACTIVE' | 'DISABLED';
+export type OciBuildMode = 'ROOTLESS_BUILDKIT' | 'LOCAL_TRUSTED_BUILDKIT';
+export type OciBuildStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'TIMED_OUT'
+  | 'CANCELLED';
+export type OciArtifactVerificationStatus =
+  | 'PENDING'
+  | 'VERIFIED'
+  | 'VERIFICATION_FAILED';
+export type OciPublishAttemptStatus =
+  | 'STARTED'
+  | 'PUSHED'
+  | 'VERIFIED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'RECONCILIATION_REQUIRED';
+
+export interface OciSubsystemStatus {
+  ociEnabled: boolean;
+  allowLocalDevRegistry: boolean;
+  allowedPlatforms: string[];
+  allowedRegistryHosts: string[];
+  activeRegistryConnections: number;
+  totalBuilds: number;
+  succeededBuilds: number;
+  verifiedArtifacts: number;
+  activeBuildWorkers: number;
+}
+
+export interface OciRegistryConnection {
+  id: string;
+  workspaceId: string;
+  name: string;
+  slug: string;
+  registryHost: string;
+  scheme: 'https' | 'http';
+  registryType: OciRegistryType;
+  allowedNamespace: string;
+  credentialProjectId: string | null;
+  credentialProjectName: string | null;
+  credentialEnvironmentId: string | null;
+  credentialEnvironmentName: string | null;
+  usernameSecretId: string | null;
+  usernameSecretName: string | null;
+  passwordSecretId: string | null;
+  passwordSecretName: string | null;
+  credentialsConfigured: boolean;
+  allowInsecureLocal: boolean;
+  status: OciRegistryStatus;
+  description: string | null;
+  createdByUsername: string | null;
+  updatedByUsername: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRegistryConnectionInput {
+  name: string;
+  registryHost: string;
+  scheme?: 'https' | 'http';
+  registryType: OciRegistryType;
+  allowedNamespace: string;
+  credentialProjectId?: string | null;
+  credentialEnvironmentId?: string | null;
+  usernameSecretId?: string | null;
+  passwordSecretId?: string | null;
+  allowInsecureLocal?: boolean;
+  description?: string;
+}
+
+export interface OciBuildRecord {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  pipelineRunId: string;
+  runNumber: number | null;
+  stageRunId: string;
+  attemptId: string;
+  githubRepositoryId: number;
+  repositoryFullName: string;
+  commitSha: string;
+  sourceChecksumSha256: string | null;
+  registryConnectionId: string | null;
+  registryHost: string | null;
+  dockerfilePath: string;
+  buildContextPath: string;
+  targetImageName: string;
+  targetTag: string | null;
+  targetPlatform: string;
+  buildMode: OciBuildMode;
+  configChecksumSha256: string;
+  status: OciBuildStatus;
+  builtManifestDigest: string | null;
+  imageMediaType: string | null;
+  imageSizeBytes: number | null;
+  workerId: string;
+  failureCategory: string | null;
+  errorSummary: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
+export interface OciImageArtifact {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  pipelineRunId: string;
+  runNumber: number | null;
+  stageRunId: string;
+  attemptId: string;
+  buildRecordId: string | null;
+  registryConnectionId: string | null;
+  githubRepositoryId: number;
+  repositoryFullName: string;
+  commitSha: string;
+  registryHost: string;
+  imageRepository: string;
+  imageTag: string | null;
+  manifestDigest: string;
+  immutableReference: string;
+  imageMediaType: string;
+  platform: string;
+  imageSizeBytes: number | null;
+  verificationStatus: OciArtifactVerificationStatus;
+  verifiedAt: string | null;
+  publishedAt: string;
+  retentionPolicy: 'RETAIN_METADATA' | 'REFERENCED_PROTECTED';
+  errorSummary: string | null;
+  createdAt: string;
+}
+
+export interface OciPublishAttempt {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  pipelineRunId: string;
+  stageRunId: string;
+  attemptId: string;
+  buildRecordId: string | null;
+  registryConnectionId: string | null;
+  artifactId: string | null;
+  workerId: string;
+  registryHost: string;
+  imageRepository: string;
+  imageTag: string | null;
+  expectedDigest: string | null;
+  reportedDigest: string | null;
+  verifiedDigest: string | null;
+  status: OciPublishAttemptStatus;
+  failureCategory: string | null;
+  errorSummary: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export interface OciArtifactEvent {
+  id: string;
+  pipelineRunId: string;
+  buildRecordId: string | null;
+  artifactId: string | null;
+  publishAttemptId: string | null;
+  eventType: string;
+  actorLabel: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+}
+
+export interface OciImageArtifactDetail {
+  artifact: OciImageArtifact;
+  buildRecord: OciBuildRecord | null;
+  publishAttempts: OciPublishAttempt[];
+  events: OciArtifactEvent[];
+}
+
+export interface PipelineRunArtifacts {
+  pipelineRunId: string;
+  builds: OciBuildRecord[];
+  publishAttempts: OciPublishAttempt[];
+  artifacts: OciImageArtifact[];
+  events: OciArtifactEvent[];
 }

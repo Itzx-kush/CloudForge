@@ -130,6 +130,21 @@ cloudforge:
     denied-audit-cooldown-seconds: ${CLOUDFORGE_SECRETS_DENIED_AUDIT_COOLDOWN_SECONDS:10}
     operator-rotation-enabled: ${CLOUDFORGE_SECRETS_OPERATOR_ROTATION_ENABLED:false}
     operator-rotation-token: ${CLOUDFORGE_SECRETS_OPERATOR_ROTATION_TOKEN:}
+  oci:
+    enabled: ${CLOUDFORGE_OCI_ENABLED:false}
+    allow-local-dev-registry: ${CLOUDFORGE_OCI_ALLOW_LOCAL_DEV_REGISTRY:false}
+    allow-insecure-local-credential-delivery: ${CLOUDFORGE_OCI_ALLOW_INSECURE_LOCAL_CREDENTIAL_DELIVERY:false}
+    allowed-registry-hosts: ${CLOUDFORGE_OCI_ALLOWED_REGISTRY_HOSTS:}
+    allowed-worker-ids: ${CLOUDFORGE_OCI_ALLOWED_WORKER_IDS:}
+    allowed-platforms: ${CLOUDFORGE_OCI_ALLOWED_PLATFORMS:linux/amd64,linux/arm64}
+    handoff-storage-dir: ${CLOUDFORGE_OCI_HANDOFF_STORAGE_DIR:${java.io.tmpdir}/cloudforge-oci-handoff}
+    max-source-handoff-bytes: ${CLOUDFORGE_OCI_MAX_SOURCE_HANDOFF_BYTES:33554432}
+    max-oci-layout-handoff-bytes: ${CLOUDFORGE_OCI_MAX_LAYOUT_HANDOFF_BYTES:268435456}
+    max-total-handoff-storage-bytes: ${CLOUDFORGE_OCI_MAX_TOTAL_HANDOFF_BYTES:1073741824}
+    handoff-ttl-seconds: ${CLOUDFORGE_OCI_HANDOFF_TTL_SECONDS:1800}
+    max-build-timeout-seconds: ${CLOUDFORGE_OCI_MAX_BUILD_TIMEOUT_SECONDS:900}
+    max-credential-deliveries-per-attempt: ${CLOUDFORGE_OCI_MAX_CREDENTIAL_DELIVERIES_PER_ATTEMPT:2}
+    handoff-cleanup-interval-ms: ${CLOUDFORGE_OCI_HANDOFF_CLEANUP_INTERVAL_MS:300000}
 
 logging:
   level:

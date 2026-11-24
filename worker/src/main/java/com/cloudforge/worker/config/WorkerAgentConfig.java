@@ -1,9 +1,13 @@
 package com.cloudforge.worker.config;
 
 import java.net.URI;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Configuration for the standalone CloudForge execution-plane worker agent.
@@ -26,11 +30,20 @@ public record WorkerAgentConfig(
         int maxConcurrency,
         List<String> supportedOperations,
         boolean secretDeliveryEnabled,
-        boolean allowInsecureLocalDelivery
+        boolean allowInsecureLocalDelivery,
+        boolean ociBuildKitEnabled,
+        String buildKitDriver,
+        String buildKitBuilder,
+        String buildKitAddr,
+        boolean allowBuildNetwork,
+        boolean allowLocalDevRegistry,
+        Set<String> allowedBaseImages
 ) {
     public static final String SOURCE_OPERATION = "GITHUB_SOURCE_ACQUIRE";
+    public static final String OCI_BUILD_OPERATION = "OCI_IMAGE_BUILD";
+    public static final String OCI_PUBLISH_OPERATION = "OCI_IMAGE_PUBLISH";
     public static final String DEFAULT_EXECUTOR_IMAGE = "alpine:3.20";
-    public static final String AGENT_VERSION = "0.3.4-phase3.4";
+    public static final String AGENT_VERSION = "0.3.5-phase3.5b";
 
     public WorkerAgentConfig(
             String controlPlaneBaseUrl,
@@ -66,7 +79,61 @@ public record WorkerAgentConfig(
                 maxConcurrency,
                 supportedOperations,
                 false,
-                false
+                false,
+                false,
+                "buildx",
+                "cloudforge-buildkit",
+                "",
+                false,
+                false,
+                Set.of()
+        );
+    }
+
+    public WorkerAgentConfig(
+            String controlPlaneBaseUrl,
+            String workerId,
+            String workerToken,
+            String displayName,
+            String hostLabel,
+            String agentVersion,
+            String executorImage,
+            String cpuLimit,
+            String memoryLimit,
+            int pidsLimit,
+            int maxExecutionTimeoutSeconds,
+            long pollIntervalMs,
+            long heartbeatIntervalMs,
+            int maxConcurrency,
+            List<String> supportedOperations,
+            boolean secretDeliveryEnabled,
+            boolean allowInsecureLocalDelivery
+    ) {
+        this(
+                controlPlaneBaseUrl,
+                workerId,
+                workerToken,
+                displayName,
+                hostLabel,
+                agentVersion,
+                executorImage,
+                cpuLimit,
+                memoryLimit,
+                pidsLimit,
+                maxExecutionTimeoutSeconds,
+                pollIntervalMs,
+                heartbeatIntervalMs,
+                maxConcurrency,
+                supportedOperations,
+                secretDeliveryEnabled,
+                allowInsecureLocalDelivery,
+                false,
+                "buildx",
+                "cloudforge-buildkit",
+                "",
+                false,
+                false,
+                Set.of()
         );
     }
 
@@ -136,12 +203,39 @@ public record WorkerAgentConfig(
             );
         }
         supportedOperations = List.copyOf(supportedOperations);
+        allowedBaseImages = allowedBaseImages == null ? Set.of() : Set.copyOf(allowedBaseImages);
+        buildKitDriver = (buildKitDriver == null || buildKitDriver.isBlank()) ? "buildx" : buildKitDriver.trim().toLowerCase(Locale.ROOT);
+        buildKitBuilder = buildKitBuilder == null ? "" : buildKitBuilder.trim();
+        buildKitAddr = buildKitAddr == null ? "" : buildKitAddr.trim();
+
         if (supportedOperations.contains(SOURCE_OPERATION)) {
             URI endpoint = URI.create(controlPlaneBaseUrl);
-            if (!supportedOperations.equals(List.of(SOURCE_OPERATION)) || maxConcurrency != 1 || !"https".equals(endpoint.getScheme())
+            if (ociBuildKitEnabled
+                    || !supportedOperations.equals(List.of(SOURCE_OPERATION))
+                    || maxConcurrency != 1
+                    || !"https".equals(endpoint.getScheme())
                     || endpoint.getHost() == null || endpoint.getUserInfo() != null
                     || endpoint.getQuery() != null || endpoint.getFragment() != null) {
                 throw new IllegalArgumentException("Source workers require a dedicated HTTPS control plane connection");
+            }
+        }
+        boolean hasOciOp = supportedOperations.contains(OCI_BUILD_OPERATION)
+                || supportedOperations.contains(OCI_PUBLISH_OPERATION);
+        if (ociBuildKitEnabled || hasOciOp) {
+            if (!ociBuildKitEnabled || !hasOciOp
+                    || !supportedOperations.stream().allMatch(op -> op.equals(OCI_BUILD_OPERATION) || op.equals(OCI_PUBLISH_OPERATION))
+                    || maxConcurrency > 2) {
+                throw new IllegalArgumentException(
+                        "OCI BuildKit workers must enable CLOUDFORGE_WORKER_OCI_BUILDKIT_ENABLED=true, advertise only OCI operations, and keep maxConcurrency <= 2"
+                );
+            }
+            if (!"buildx".equals(buildKitDriver) && !"buildctl".equals(buildKitDriver)) {
+                throw new IllegalArgumentException("Unsupported CLOUDFORGE_OCI_BUILDKIT_DRIVER: " + buildKitDriver);
+            }
+            if (!isHttpsOrAllowedLoopback(controlPlaneBaseUrl, allowInsecureLocalDelivery)) {
+                throw new IllegalArgumentException(
+                        "OCI BuildKit workers require https:// control plane URL (or loopback with CLOUDFORGE_WORKER_ALLOW_INSECURE_LOCAL_DELIVERY=true)"
+                );
             }
         }
     }
@@ -183,8 +277,29 @@ public record WorkerAgentConfig(
         boolean allowInsecureLocalDelivery = Boolean.parseBoolean(
                 env.getOrDefault("CLOUDFORGE_WORKER_ALLOW_INSECURE_LOCAL_DELIVERY", "false")
         );
-
         boolean sourceOnly = Boolean.parseBoolean(env.getOrDefault("CLOUDFORGE_WORKER_SOURCE_ONLY", "false"));
+        boolean ociBuildKit = Boolean.parseBoolean(env.getOrDefault("CLOUDFORGE_WORKER_OCI_BUILDKIT_ENABLED", "false"));
+        if (sourceOnly && ociBuildKit) {
+            throw new IllegalArgumentException(
+                    "CLOUDFORGE_WORKER_SOURCE_ONLY and CLOUDFORGE_WORKER_OCI_BUILDKIT_ENABLED are mutually exclusive"
+            );
+        }
+
+        String buildKitDriver = env.getOrDefault("CLOUDFORGE_OCI_BUILDKIT_DRIVER", "buildx");
+        String buildKitBuilder = env.getOrDefault("CLOUDFORGE_OCI_BUILDKIT_BUILDER", "");
+        String buildKitAddr = env.getOrDefault("CLOUDFORGE_OCI_BUILDKIT_ADDR", "");
+        boolean allowBuildNetwork = Boolean.parseBoolean(env.getOrDefault("CLOUDFORGE_OCI_ALLOW_BUILD_NETWORK", "false"));
+        boolean allowLocalDevRegistry = Boolean.parseBoolean(
+                env.getOrDefault("CLOUDFORGE_OCI_ALLOW_LOCAL_DEV_REGISTRY_WORKER", "false")
+        );
+        Set<String> allowedBaseImages = parseCsvSet(env.getOrDefault("CLOUDFORGE_OCI_ALLOWED_BASE_IMAGES", ""));
+
+        List<String> ops = sourceOnly
+                ? List.of(SOURCE_OPERATION)
+                : ociBuildKit
+                ? List.of(OCI_BUILD_OPERATION, OCI_PUBLISH_OPERATION)
+                : List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST", "WORKER_DIAGNOSTICS");
+
         return new WorkerAgentConfig(
                 baseUrl,
                 workerId,
@@ -200,11 +315,27 @@ public record WorkerAgentConfig(
                 pollMs,
                 hbMs,
                 concurrency,
-                sourceOnly ? List.of(SOURCE_OPERATION)
-                        : List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST", "WORKER_DIAGNOSTICS"),
+                ops,
                 secretDeliveryEnabled,
-                allowInsecureLocalDelivery
+                allowInsecureLocalDelivery,
+                ociBuildKit,
+                buildKitDriver,
+                buildKitBuilder,
+                buildKitAddr,
+                allowBuildNetwork,
+                allowLocalDevRegistry,
+                allowedBaseImages
         );
+    }
+
+    private static Set<String> parseCsvSet(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(raw.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private static int parseInt(String raw, int fallback) {

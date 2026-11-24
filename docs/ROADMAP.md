@@ -1,6 +1,6 @@
 # CloudForge Development Roadmap
 
-This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.4)** functionality from **Planned (Phases 3.5–4)** capabilities.
+This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.5)** functionality from **Planned (Phases 3.6–4)** capabilities.
 
 ---
 
@@ -78,13 +78,21 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.4
 
 ---
 
-## Phases 3.5–3.7 — Container Registry, Kubernetes & Rollback
+## Phase 3.5 — Secure Container Builds, OCI Registry Publishing & Immutable Artifact Management (**Implemented — Trusted-Repository BuildKit Mode**)
 
-- [x] **Phase 3.5 source acquisition draft:** Pin a GitHub branch or tag to its commit and verify a bounded archive on a dedicated worker. See the [source acquisition runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md).
+- [x] **Phase 3.5A — Immutable GitHub Source Acquisition (`V7__container_builds_oci_registry.sql`):** Queue-time resolution of branch/tag refs to immutable 40-character GitHub commit SHAs, single-grant HTTPS archive issuance, dedicated `GITHUB_SOURCE` worker, bounded ZIP extraction (32 MiB ZIP / 128 MiB extracted / 12,000 entries), symlink/path-traversal rejection, and verified canonical ZIP build-context handoff (`oci_source_handoffs`).
+- [x] **Phase 3.5B — PostgreSQL Persistence (`V8__oci_builds_and_registry_artifacts.sql`):** Non-destructive Flyway migration extending `worker_nodes` (`OCI_BUILDKIT`) and `stage_execution_attempts` (6 OCI failure categories) and adding `oci_registry_connections`, `oci_source_handoffs`, `oci_build_records`, `oci_image_artifacts`, `oci_publish_attempts`, and `oci_artifact_events` (31 application tables total).
+- [x] **Declarative OCI Build Config & Defensive Dockerfile Validation (`BuildRequestValidator`, `DockerfilePolicyValidator`):** Rejects path traversal, absolute host paths, remote URI contexts, Docker daemon endpoints, privileged modes, untrusted base images/frontends, remote `ADD` URLs, `RUN --security=insecure` / `--network=host` / `--mount=type=ssh|secret`, and secret-like build arguments.
+- [x] **Dedicated Bounded BuildKit Executor (`OCI_BUILDKIT` / `BuildKitExecutionAdapter` & `OciLayoutInspector`):** Produces local verified OCI Image Layout TAR archives (`--output type=oci`, `--network=none` default, zero privileged entitlements, zero Docker socket inside backend or build containers), strictly separating Dockerfile execution (`OCI_IMAGE_BUILD`, zero credentials) from registry publishing (`OCI_IMAGE_PUBLISH`).
+- [x] **Standards-Based OCI Distribution v1.1 Publishing & Immutable Digest Verification (`OciRegistryClient`, `RegistryCredentialResolver`, `OciBuildLifecycleService`):** Resolves workspace registry credentials strictly via Phase 3.4 AES-256-GCM encrypted secrets, enforces HTTPS & SSRF IP/DNS protection, disables redirects, zeroes credential buffers in memory, independently retrieves pushed manifests by digest to verify raw SHA-256 equality, persists idempotent `oci_image_artifacts`, and marks expired non-idempotent publish attempts `RECONCILIATION_REQUIRED`.
+- [x] **Premium Frontend Integration (`OciArtifactsPanel` & `CloudForgePipelinesPanel`):** Dedicated **Builds & Artifacts** tab inside `PipelinesPage` showing honest OCI status, verified immutable artifacts with copyable digests and artifact detail modals, `OWNER`-only registry connection management referencing Phase 3.4 encrypted secrets, OCI build history, declarative OCI stage editor, and run-linked artifacts. See `docs/PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md`.
 
-- [ ] **MicroVM / Hardened Sandbox Isolation:** Introduce gVisor / Kata / Firecracker sandboxed execution before permitting untrusted repository builds.
-- [ ] **Phase 3.5 — Docker Image Deployment & OCI Registry:** Push immutable, content-addressed OCI digests to a configured container registry.
-- [ ] **Phase 3.6 — Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy projects to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.
+---
+
+## Phases 3.6–3.7 — Hardened Multi-Tenant Sandboxing, Kubernetes & Rollback (**Planned**)
+
+- [ ] **MicroVM / Hardened Sandbox Isolation:** Introduce gVisor / Kata / Firecracker sandboxed execution before permitting hostile/untrusted multi-tenant repository builds.
+- [ ] **Phase 3.6 — Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy immutable verified OCI image digests to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.
 - [ ] **Phase 3.7 — Deployment History & Rollback:** Persist every release revision (commit SHA, image digest, manifest checksum, actor, outcome) and provide one-click rollback to previously verified healthy releases.
 
 ---

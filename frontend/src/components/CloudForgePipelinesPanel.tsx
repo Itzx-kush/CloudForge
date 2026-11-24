@@ -13,6 +13,7 @@ import {
   KeyRound,
   Layers,
   Lock,
+  PackageCheck,
   Play,
   Plus,
   RefreshCw,
@@ -37,7 +38,9 @@ import {
   createPipelineDefinition,
   createPipelineRun,
   fetchEnvironmentSecrets,
+  fetchOciRegistries,
   fetchPipelineDefinitions,
+  fetchPipelineRunArtifacts,
   fetchPipelineRunEvents,
   fetchPipelineRuns,
   fetchProjectDetail,
@@ -53,8 +56,10 @@ import type {
   AttemptStatus,
   EnvironmentSecretSummary,
   LinkedRepository,
+  OciRegistryConnection,
   PipelineDefinition,
   PipelineRun,
+  PipelineRunArtifacts,
   PipelineRunEvent,
   PipelineRunStatus,
   PipelineStageRun,
@@ -70,6 +75,7 @@ import type {
   WorkerStatus,
 } from '../types/platform';
 import './CloudForgePipelinesPanel.css';
+import './OciArtifactsPanel.css';
 
 const STAGE_TYPE_OPTIONS: Array<{ value: PipelineStageType; label: string }> = [
   { value: 'SOURCE_PREP', label: 'Source Preparation' },
@@ -116,11 +122,30 @@ const ALLOWLISTED_OPS_BY_STAGE_TYPE: Partial<
     { value: 'ENV_VALIDATION', label: 'ENV_VALIDATION (Container sandbox check)' },
     { value: 'WORKER_DIAGNOSTICS', label: 'WORKER_DIAGNOSTICS (Resource & isolation probe)' },
   ],
+  BUILD: [
+    { value: 'OCI_IMAGE_BUILD', label: 'OCI_IMAGE_BUILD (Dedicated BuildKit OCI image build)' },
+  ],
   TEST: [
     { value: 'CONTROLLED_SMOKE_TEST', label: 'CONTROLLED_SMOKE_TEST (Deterministic smoke test)' },
     { value: 'WORKER_DIAGNOSTICS', label: 'WORKER_DIAGNOSTICS (Resource & isolation probe)' },
   ],
+  CONTAINER_PACKAGE: [
+    { value: 'OCI_IMAGE_PUBLISH', label: 'OCI_IMAGE_PUBLISH (Publish & verify immutable digest)' },
+  ],
 };
+
+function isOciStageOperation(op: string): boolean {
+  return op === 'OCI_IMAGE_BUILD' || op === 'OCI_IMAGE_PUBLISH';
+}
+
+function stageSupportsSecretBindings(stageType: PipelineStageType, allowedOperation: string): boolean {
+  return (
+    (ALLOWLISTED_OPS_BY_STAGE_TYPE[stageType]?.length ?? 0) > 0 &&
+    Boolean(allowedOperation) &&
+    allowedOperation !== 'GITHUB_SOURCE_ACQUIRE' &&
+    !isOciStageOperation(allowedOperation)
+  );
+}
 
 const WORKER_STATUS_META: Record<WorkerStatus, { label: string; tone: BadgeTone; pulse?: boolean }> = {
   AVAILABLE: { label: 'Available', tone: 'healthy', pulse: true },
@@ -151,6 +176,13 @@ interface EditableStageRow {
   maxRetries: number;
   allowFailure: boolean;
   secretBindings: StageSecretBindingInput[];
+  ociRegistryId?: string;
+  ociDockerfilePath?: string;
+  ociContextPath?: string;
+  ociTargetImageName?: string;
+  ociTargetTag?: string;
+  ociTargetPlatform?: string;
+  ociBuildMode?: string;
 }
 
 function defaultStarterStages(): EditableStageRow[] {
@@ -227,6 +259,8 @@ export function CloudForgePipelinesPanel() {
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [totalRuns, setTotalRuns] = useState(0);
   const [workerPool, setWorkerPool] = useState<WorkerPoolStatus | null>(null);
+  const [ociRegistries, setOciRegistries] = useState<OciRegistryConnection[]>([]);
+  const [selectedRunArtifacts, setSelectedRunArtifacts] = useState<PipelineRunArtifacts | null>(null);
 
   // Stage execution attempts & bounded sanitized logs state (keyed by stageRunId)
   const [expandedStageId, setExpandedStageId] = useState<string | null>(null);
@@ -304,7 +338,7 @@ export function CloudForgePipelinesPanel() {
       setErrorMessage(null);
 
       try {
-        const [projRes, repoRes, defRes, runRes, workerRes] = await Promise.all([
+        const [projRes, repoRes, defRes, runRes, workerRes, regRes] = await Promise.all([
           fetchProjects(activeWorkspace.id, { page: 0, size: 100 }),
           fetchRepositories(activeWorkspace.id, { page: 0, size: 100 }),
           fetchPipelineDefinitions(activeWorkspace.id, {
@@ -321,6 +355,7 @@ export function CloudForgePipelinesPanel() {
             size: 25,
           }),
           fetchWorkerPoolStatus(activeWorkspace.id).catch(() => null),
+          fetchOciRegistries(activeWorkspace.id).catch(() => []),
         ]);
 
         setProjects(Array.isArray(projRes.items) ? projRes.items : []);
@@ -332,6 +367,7 @@ export function CloudForgePipelinesPanel() {
         setWorkerPool(
           workerRes && typeof workerRes.workerPlaneEnabled === 'boolean' ? workerRes : null
         );
+        setOciRegistries(Array.isArray(regRes) ? regRes : []);
       } catch (error) {
         setErrorMessage(
           error instanceof Error
@@ -436,6 +472,13 @@ export function CloudForgePipelinesPanel() {
           secretId: b.secretId,
           deliveryAlias: b.deliveryAlias,
         })),
+        ociRegistryId: s.metadata?.registryConnectionId ?? '',
+        ociDockerfilePath: s.metadata?.dockerfilePath ?? 'Dockerfile',
+        ociContextPath: s.metadata?.buildContextPath ?? '.',
+        ociTargetImageName: s.metadata?.targetImageName ?? '',
+        ociTargetTag: s.metadata?.targetTag ?? '',
+        ociTargetPlatform: s.metadata?.targetPlatform ?? 'linux/amd64',
+        ociBuildMode: s.metadata?.buildMode ?? 'ROOTLESS_BUILDKIT',
       }))
     );
     setDefFormError(null);
@@ -504,11 +547,27 @@ export function CloudForgePipelinesPanel() {
     setDefFieldErrors({});
 
     const stagePayload: StageDefinitionInput[] = formStages.map((s) => {
-      const stageEligibleForSecrets =
-        (ALLOWLISTED_OPS_BY_STAGE_TYPE[s.stageType]?.length ?? 0) > 0 && Boolean(s.allowedOperation);
+      const stageEligibleForSecrets = stageSupportsSecretBindings(s.stageType, s.allowedOperation);
       const cleanedBindings = stageEligibleForSecrets
         ? s.secretBindings.filter((b) => b.secretId && b.deliveryAlias.trim().length > 0)
         : [];
+      let metadata: Record<string, string> | undefined;
+      if (s.allowedOperation) {
+        metadata = { operation: s.allowedOperation };
+        if (s.allowedOperation === 'OCI_IMAGE_BUILD') {
+          if (s.ociRegistryId) metadata.registryConnectionId = s.ociRegistryId;
+          metadata.dockerfilePath = (s.ociDockerfilePath ?? 'Dockerfile').trim() || 'Dockerfile';
+          metadata.buildContextPath = (s.ociContextPath ?? '.').trim() || '.';
+          if (s.ociTargetImageName?.trim()) metadata.targetImageName = s.ociTargetImageName.trim();
+          if (s.ociTargetTag?.trim()) metadata.targetTag = s.ociTargetTag.trim();
+          metadata.targetPlatform = s.ociTargetPlatform || 'linux/amd64';
+          metadata.buildMode = s.ociBuildMode || 'ROOTLESS_BUILDKIT';
+        } else if (s.allowedOperation === 'OCI_IMAGE_PUBLISH') {
+          if (s.ociRegistryId) metadata.registryConnectionId = s.ociRegistryId;
+          if (s.ociTargetImageName?.trim()) metadata.targetImageName = s.ociTargetImageName.trim();
+          if (s.ociTargetTag?.trim()) metadata.targetTag = s.ociTargetTag.trim();
+        }
+      }
       return {
         stageKey: s.stageKey.trim().toLowerCase(),
         displayName: s.displayName.trim(),
@@ -517,7 +576,7 @@ export function CloudForgePipelinesPanel() {
         timeoutSeconds: Number(s.timeoutSeconds) || 600,
         maxRetries: Number(s.maxRetries) || 0,
         allowFailure: s.allowFailure,
-        metadata: s.allowedOperation ? { operation: s.allowedOperation } : undefined,
+        metadata,
         secretBindings: cleanedBindings.length > 0 ? cleanedBindings : undefined,
       };
     });
@@ -630,12 +689,19 @@ export function CloudForgePipelinesPanel() {
     setStageLogs({});
     setStageExecError({});
     setRunEvents([]);
+    setSelectedRunArtifacts(null);
     setEventsError(null);
     if (!activeWorkspace) return;
     setIsLoadingEvents(true);
     try {
-      const events = await fetchPipelineRunEvents(activeWorkspace.id, run.id);
+      const [events, runArtifacts] = await Promise.all([
+        fetchPipelineRunEvents(activeWorkspace.id, run.id),
+        fetchPipelineRunArtifacts(activeWorkspace.id, run.id).catch(() => null),
+      ]);
       setRunEvents(Array.isArray(events) ? events : []);
+      if (runArtifacts && Array.isArray(runArtifacts.artifacts)) {
+        setSelectedRunArtifacts(runArtifacts);
+      }
     } catch (error) {
       setEventsError(
         error instanceof Error ? error.message : 'Unable to load lifecycle transition events.'
@@ -1626,7 +1692,7 @@ export function CloudForgePipelinesPanel() {
                             updateStageRow(stage.localId, (row) => ({
                               ...row,
                               allowedOperation: e.target.value,
-                              secretBindings: e.target.value && e.target.value !== 'GITHUB_SOURCE_ACQUIRE'
+                              secretBindings: stageSupportsSecretBindings(row.stageType, e.target.value)
                                 ? row.secretBindings
                                 : [],
                             }))
@@ -1647,14 +1713,143 @@ export function CloudForgePipelinesPanel() {
                       )}
                     </div>
 
+                    {isOciStageOperation(stage.allowedOperation) && (
+                      <div className="cf-field">
+                        <span className="cf-field__label">
+                          OCI Container Build &amp; Registry Configuration (Phase 3.5B)
+                        </span>
+                        <div className="cf-oci-config-grid">
+                          <div className="cf-field">
+                            <label htmlFor={`stage-oci-reg-${stage.localId}`} className="cf-field__label">
+                              Registry Connection *
+                            </label>
+                            <select
+                              id={`stage-oci-reg-${stage.localId}`}
+                              className="cf-select"
+                              value={stage.ociRegistryId ?? ''}
+                              onChange={(e) =>
+                                updateStageRow(stage.localId, (row) => ({
+                                  ...row,
+                                  ociRegistryId: e.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">Select approved workspace registry...</option>
+                              {ociRegistries
+                                .filter((r) => r.status === 'ACTIVE')
+                                .map((reg) => (
+                                  <option key={reg.id} value={reg.id}>
+                                    {reg.name} ({reg.registryHost}/{reg.allowedNamespace}/*)
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+
+                          <div className="cf-field">
+                            <label htmlFor={`stage-oci-image-${stage.localId}`} className="cf-field__label">
+                              Target Image Repository *
+                            </label>
+                            <input
+                              id={`stage-oci-image-${stage.localId}`}
+                              type="text"
+                              className="cf-input mono"
+                              placeholder="namespace/app-name"
+                              value={stage.ociTargetImageName ?? ''}
+                              onChange={(e) =>
+                                updateStageRow(stage.localId, (row) => ({
+                                  ...row,
+                                  ociTargetImageName: e.target.value,
+                                }))
+                              }
+                            />
+                          </div>
+
+                          <div className="cf-field">
+                            <label htmlFor={`stage-oci-tag-${stage.localId}`} className="cf-field__label">
+                              Convenience Tag (Optional)
+                            </label>
+                            <input
+                              id={`stage-oci-tag-${stage.localId}`}
+                              type="text"
+                              className="cf-input mono"
+                              placeholder="v1 or leave blank for sha-<commit>"
+                              value={stage.ociTargetTag ?? ''}
+                              onChange={(e) =>
+                                updateStageRow(stage.localId, (row) => ({
+                                  ...row,
+                                  ociTargetTag: e.target.value,
+                                }))
+                              }
+                            />
+                          </div>
+
+                          {stage.allowedOperation === 'OCI_IMAGE_BUILD' && (
+                            <>
+                              <div className="cf-field">
+                                <label htmlFor={`stage-oci-df-${stage.localId}`} className="cf-field__label">
+                                  Dockerfile Path
+                                </label>
+                                <input
+                                  id={`stage-oci-df-${stage.localId}`}
+                                  type="text"
+                                  className="cf-input mono"
+                                  value={stage.ociDockerfilePath ?? 'Dockerfile'}
+                                  onChange={(e) =>
+                                    updateStageRow(stage.localId, (row) => ({
+                                      ...row,
+                                      ociDockerfilePath: e.target.value,
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div className="cf-field">
+                                <label htmlFor={`stage-oci-ctx-${stage.localId}`} className="cf-field__label">
+                                  Build Context Path
+                                </label>
+                                <input
+                                  id={`stage-oci-ctx-${stage.localId}`}
+                                  type="text"
+                                  className="cf-input mono"
+                                  value={stage.ociContextPath ?? '.'}
+                                  onChange={(e) =>
+                                    updateStageRow(stage.localId, (row) => ({
+                                      ...row,
+                                      ociContextPath: e.target.value,
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div className="cf-field">
+                                <label htmlFor={`stage-oci-plat-${stage.localId}`} className="cf-field__label">
+                                  Target Platform
+                                </label>
+                                <select
+                                  id={`stage-oci-plat-${stage.localId}`}
+                                  className="cf-select mono"
+                                  value={stage.ociTargetPlatform ?? 'linux/amd64'}
+                                  onChange={(e) =>
+                                    updateStageRow(stage.localId, (row) => ({
+                                      ...row,
+                                      ociTargetPlatform: e.target.value,
+                                    }))
+                                  }
+                                >
+                                  <option value="linux/amd64">linux/amd64</option>
+                                  <option value="linux/arm64">linux/arm64</option>
+                                </select>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="cf-field">
                       <div className="cf-jobs-section__header">
                         <span className="cf-field__label">
                           Authorized Secret Bindings (Phase 3.4)
                         </span>
-                        {(ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 &&
-                          stage.allowedOperation &&
-                          stage.allowedOperation !== 'GITHUB_SOURCE_ACQUIRE' &&
+                        {stageSupportsSecretBindings(stage.stageType, stage.allowedOperation) &&
                           formTargetEnvId &&
                           availableSecrets.length > 0 && (
                             <button
@@ -1685,11 +1880,7 @@ export function CloudForgePipelinesPanel() {
                           )}
                       </div>
 
-                      {!(
-                        (ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 &&
-                        stage.allowedOperation &&
-                        stage.allowedOperation !== 'GITHUB_SOURCE_ACQUIRE'
-                      ) ? (
+                      {!stageSupportsSecretBindings(stage.stageType, stage.allowedOperation) ? (
                         <div className="cf-stage-capability-note">
                           This stage does not accept secret bindings.
                         </div>
@@ -2289,6 +2480,53 @@ export function CloudForgePipelinesPanel() {
                 })}
               </div>
             </div>
+
+            {selectedRunArtifacts &&
+              (selectedRunArtifacts.artifacts.length > 0 ||
+                selectedRunArtifacts.builds.length > 0) && (
+                <div className="cf-jobs-section">
+                  <h3 className="cf-jobs-section__title">
+                    <PackageCheck
+                      size={14}
+                      aria-hidden="true"
+                      style={{ verticalAlign: '-2px', marginRight: '6px' }}
+                    />
+                    Verified OCI Artifacts &amp; Builds (
+                    {selectedRunArtifacts.artifacts.length} artifacts ·{' '}
+                    {selectedRunArtifacts.builds.length} builds)
+                  </h3>
+                  {selectedRunArtifacts.artifacts.length > 0 && (
+                    <div className="cf-oci-artifact-cards">
+                      {selectedRunArtifacts.artifacts.map((art) => (
+                        <div key={art.id} className="cf-oci-artifact-card">
+                          <div className="cf-oci-artifact-card__head">
+                            <span className="cf-oci-artifact-card__repo">
+                              {art.registryHost}/{art.imageRepository}
+                              {art.imageTag ? `:${art.imageTag}` : ''}
+                            </span>
+                            <StatusBadge
+                              label={
+                                art.verificationStatus === 'VERIFIED'
+                                  ? 'Digest Verified'
+                                  : art.verificationStatus
+                              }
+                              tone={art.verificationStatus === 'VERIFIED' ? 'healthy' : 'error'}
+                              size="sm"
+                            />
+                          </div>
+                          <div className="mono" style={{ fontSize: '11.5px', wordBreak: 'break-all' }}>
+                            {art.immutableReference}
+                          </div>
+                          <div className="cf-oci-artifact-card__meta">
+                            <span>Platform: {art.platform}</span>
+                            <span>Commit: {art.commitSha.slice(0, 10)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
             <div className="cf-jobs-section">
               <div className="cf-jobs-section__header">
