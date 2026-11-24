@@ -1,6 +1,6 @@
 # CloudForge Architecture
 
-This document describes the **implemented Phase 1, Phase 2 & Phase 3.1 architecture** alongside the **planned target architecture** for Phases 3.2–4. Every section explicitly distinguishes what is live today from what is planned.
+This document describes the **implemented Phase 1, Phase 2, Phase 3.1 & Phase 3.2 architecture** alongside the **planned target architecture** for Phases 3.3–4. Every section explicitly distinguishes what is live today from what is planned.
 
 ---
 
@@ -9,12 +9,12 @@ This document describes the **implemented Phase 1, Phase 2 & Phase 3.1 architect
 1. **Clear Separation of Concerns:** The React control-plane UI, Java 17 Spring Boot API, PostgreSQL 17 data layer, and GitHub integration layer communicate through explicit HTTP/JSON, OAuth 2.0, GitHub App JWT, and JDBC contracts.
 2. **Identity vs. Repository Authorization Separation:** GitHub OAuth 2.0 handles user identity (`read:user`, `user:email`), whereas a dedicated GitHub App handles least-privilege repository discovery (`metadata: read`) and read-only GitHub Actions telemetry (`actions: read`) via short-lived scoped installation tokens and HMAC-SHA256 verified webhooks.
 3. **Defense-in-Depth & Backend-Enforced Authorization:** Every workspace-scoped API verifies server-side session authentication, CSRF tokens (for mutations), workspace membership, and RBAC roles (`OWNER`, `DEVELOPER`, `VIEWER`) on the backend — never relying on frontend visibility alone.
-4. **No Arbitrary Repository Execution or Plaintext Secrets:** Phase 2 persists non-secret environment configuration only and never executes repository code or triggers builds/deployments.
+4. **No Arbitrary Repository Execution or Plaintext Secrets:** CloudForge persists non-secret environment configuration and declarative orchestration DAG metadata only; it never executes arbitrary shell commands, repository scripts, Docker builds, or Kubernetes jobs inside the control-plane backend.
 5. **Versioned, Non-Destructive Persistence:** Flyway manages all PostgreSQL schema evolution (`ddl-auto: none` in runtime, `validate` in test profile), preserving the existing Docker volume cleanly.
 
 ---
 
-## 2. Phase 1 & Phase 2 Implemented Architecture
+## 2. Phases 1–3.2 Implemented Architecture
 
 ### 2.1 High-Level Component Diagram
 
@@ -54,40 +54,48 @@ flowchart LR
   - Atomically claims `X-GitHub-Delivery` via `INSERT ... ON CONFLICT DO NOTHING` in `webhook_deliveries` prior to executing side effects so concurrent duplicate deliveries cannot duplicate state changes or abort PostgreSQL transactions.
   - Handles `ping`, `installation`, `installation_repositories`, and `repository` lifecycle events; safely ignores unsupported events (such as `push`) with `202 Accepted` without triggering builds or deployments.
 
-### 2.4 Backend Package Structure (`com.cloudforge.backend`)
+### 2.4 Pipeline Orchestration Subsystem (Phase 3.2 — `com.cloudforge.backend.orchestration`)
+
+- **`orchestration.engine`:** Pure, deterministic orchestration core containing `PipelineStateMachine`, `StageStateMachine`, `StageDagValidator` (Kahn topological sorting, cycle/missing/duplicate/command/secret validation), `StageDependencyEvaluator` (downstream readiness & failure propagation), and `WorkerAssignmentContract` (explicit internal contract for future Phase 3.3 workers).
+- **`orchestration.entity` & `orchestration.repository`:** Six PostgreSQL-backed entities (`PipelineDefinitionEntity`, `PipelineStageDefinitionEntity`, `PipelineRunEntity`, `PipelineStageRunEntity`, `PipelineRunEventEntity`, `PipelineIdempotencyKeyEntity`) with encapsulated status transitions (no public `setStatus`), optimistic `@Version` row locking, pessimistic `FOR UPDATE` locking, and typed Criteria search queries.
+- **`orchestration.service` & `orchestration.controller`:** `PipelineDefinitionService`, `PipelineIdempotencyService`, `PipelineOrchestrationService`, and `PipelineOrchestrationController` exposing 9 workspace-isolated RBAC REST endpoints under `/api/workspaces/{workspaceId}/pipelines`. Queued runs persist immutable definition snapshots, promote root stages to `READY`, record immutable `pipeline_run_events` and workspace `audit_events`, and remain `QUEUED` (`Queued — Awaiting execution infrastructure`) until Phase 3.3 isolated workers exist. See `docs/PHASE3_2_PIPELINE_ORCHESTRATION.md`.
+
+### 2.5 Backend Package Structure (`com.cloudforge.backend`)
 
 | Package | Responsibility |
 | --- | --- |
 | `controller` | REST APIs (`HealthController`, `AuthController`, `WorkspaceController`, `ProjectController`, `GitHubIntegrationController`, `PipelineController`, `GitHubWebhookController`, `AuditEventController`, `SpaPageController`). |
 | `service` | Domain logic (`HealthService`, `UserAccountService`, `WorkspaceAuthorizationService`, `WorkspaceService`, `ProjectService`, `ProjectEnvironmentService`, `GitHubIntegrationService`, `GitHubActionsSyncService`, `PipelineService`, `GitHubWebhookService`, `AuditService`, `AuditQueryService`). |
+| `orchestration` | Phase 3.2 modular pipeline orchestration subsystem (`controller`, `service`, `engine`, `entity`, `repository`, `dto`) managing persistent pipeline definitions, DAG validation, state machines, idempotency, concurrency control, cancellation, and Phase 3.3 worker contracts. |
 | `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubTokenScope`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`, typed metadata DTOs & integration exceptions). |
 | `security` | Spring Security filter chain, OAuth 2.0 user service, success/failure handlers, `CloudForgeUserPrincipal`, `RedirectOriginValidator`, SPA CSRF handler/filter, JSON 401/403 handlers. |
-| `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 11 domain JPA entities + enums (including `GitHubWorkflowEntity`, `GitHubWorkflowRunEntity`, `WorkflowRunNormalizedStatus`). |
-| `repository` | `DatabaseProbeRepository` + 11 Spring Data JPA repositories with workspace-scoped `JOIN FETCH` and typed Criteria queries. |
+| `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 11 core domain JPA entities + enums (including `GitHubWorkflowEntity`, `GitHubWorkflowRunEntity`, `WorkflowRunNormalizedStatus`). |
+| `repository` | `DatabaseProbeRepository` + 11 core Spring Data JPA repositories with workspace-scoped `JOIN FETCH` and typed Criteria queries. |
 | `dto` | Immutable Java 17 request/response records with Bean Validation constraints. |
 | `config` | `AppProperties` (CORS, Auth, GitHub App), `WebConfig`, `RequestCorrelationFilter`. |
-| `exception` | `GlobalExceptionHandler` + typed domain/integration exceptions returning structured `ApiErrorResponse`. |
+| `exception` | `GlobalExceptionHandler` + typed domain/integration exceptions returning structured `ApiErrorResponse` (including `409 Conflict` for optimistic locking failures). |
 
-### 2.5 Database Schema (Flyway Migrations)
+### 2.6 Database Schema (Flyway Migrations)
 
 Located under `backend/src/main/resources/db/migration/`:
 - **`V1__phase2_core_schema.sql`:** `users`, `workspaces`, `workspace_members`, `github_installations`, `linked_repositories`, `projects`, `project_environments`, `audit_events` with UUID primary keys, foreign keys, role/status check constraints, unique constraints, and query indexes.
 - **`V2__webhook_deliveries.sql`:** `webhook_deliveries` for idempotent webhook processing and SHA-256 payload fingerprinting without storing sensitive payload bodies.
 - **`V3__github_actions_workflows.sql`:** `github_workflows` and `github_workflow_runs` storing non-sensitive GitHub Actions workflow definitions and execution attempts keyed by `(linked_repository_id, github_run_id, run_attempt)`.
+- **`V4__pipeline_orchestration_engine.sql`:** `pipeline_definitions`, `pipeline_stage_definitions`, `pipeline_runs`, `pipeline_stage_runs`, `pipeline_run_events`, and `pipeline_idempotency_keys` storing workspace-scoped pipeline definitions, immutable run snapshots, DAG stage instances, chronological transition events, and restart-safe idempotency claims.
 
-### 2.6 Frontend Architecture (`frontend/`)
+### 2.7 Frontend Architecture (`frontend/`)
 
 - **Framework:** React 19, TypeScript (strict mode), Vite, React Router 7, Obsidian-inspired theme & appearance system (`PreferenceProvider` supporting Dark/Light/System themes, 5 accent palettes, density, and reduced-motion).
 - **State & Auth:** `AuthContext` manages session verification (`/api/auth/me`, `/api/auth/config`), active workspace selection, role awareness, and CSRF-protected logout; `ProtectedRoute` guards authenticated views cleanly.
-- **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, structured `ApiClientError` handling (including `Retry-After` rate-limit parsing), and preserved Phase 1 live `/api/health` probing.
-- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage` (Phase 3.1 live GitHub Actions workflows, execution history, sync vs. refresh controls, and Run Details modal with live jobs/steps)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
+- **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, custom per-request headers (such as `Idempotency-Key`), structured `ApiClientError` handling (including `Retry-After` rate-limit parsing), and preserved Phase 1 live `/api/health` probing.
+- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage` (tab-separated Phase 3.1 live GitHub Actions workflows/runs/jobs + Phase 3.2 `CloudForgePipelinesPanel` for declarative pipeline definitions, DAG stage builder, idempotent run queueing, lifecycle event inspection, and cancellation)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
 - **Future-Phase Blueprint Pages:** `DeploymentsPage` (Phases 3.5–3.7) remains clearly labeled as a planned capability.
 
 ---
 
-## 3. Planned Target Architecture (Phases 3–4)
+## 3. Planned Target Architecture (Phases 3.3–4)
 
-> **Status:** Deferred beyond Phase 2. Documented to guide incremental delivery.
+> **Status:** Deferred beyond Phase 3.2. Documented to guide incremental delivery.
 
 ```mermaid
 flowchart TB

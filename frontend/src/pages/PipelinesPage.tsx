@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -10,6 +10,7 @@ import {
   Filter,
   GitBranch,
   GitCommitHorizontal,
+  Github,
   History,
   Info,
   Layers,
@@ -18,6 +19,7 @@ import {
   Workflow,
   X,
 } from 'lucide-react';
+import { CloudForgePipelinesPanel } from '../components/CloudForgePipelinesPanel';
 import { DashboardCard } from '../components/DashboardCard';
 import { DataTable, type TableColumn } from '../components/DataTable';
 import { ErrorState } from '../components/ErrorState';
@@ -190,6 +192,20 @@ function renderRunStatusBadge(
 export function PipelinesPage() {
   const { activeWorkspace, activeRole } = useAuth();
   const canSyncFromGitHub = activeRole === 'OWNER' || activeRole === 'DEVELOPER';
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab =
+    searchParams.get('view') === 'orchestration' ? 'orchestration' : 'github-actions';
+  const [activeTab, setActiveTab] = useState<'github-actions' | 'orchestration'>(initialTab);
+
+  const handleTabChange = (nextTab: 'github-actions' | 'orchestration') => {
+    setActiveTab(nextTab);
+    if (nextTab === 'orchestration') {
+      setSearchParams({ view: 'orchestration' }, { replace: true });
+    } else {
+      setSearchParams({}, { replace: true });
+    }
+  };
 
   const [overview, setOverview] = useState<PipelineOverview | null>(null);
   const [selectedRepoId, setSelectedRepoId] = useState<string>(ALL_REPOSITORIES_VALUE);
@@ -408,9 +424,11 @@ export function PipelinesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspace?.id]);
 
+  const hasOverview = overview !== null;
+
   // Reload stored workflows & runs whenever selection/filters/pagination change
   useEffect(() => {
-    if (isInitialLoading || !activeWorkspace) return;
+    if (isInitialLoading || !activeWorkspace || !hasOverview) return;
     let active = true;
     setIsRefreshingLocal(true);
 
@@ -425,6 +443,7 @@ export function PipelinesPage() {
     };
   }, [
     activeWorkspace,
+    hasOverview,
     isInitialLoading,
     loadStoredPipelineData,
   ]);
@@ -850,46 +869,86 @@ export function PipelinesPage() {
   return (
     <PageContainer
       title="Pipelines"
-      description="Read-only GitHub Actions workflow discovery, execution history, and live job inspection for authorized workspace repositories."
-      phaseBadge={{
-        label: overview?.githubAppConfigured
-          ? 'Phase 3.1 · GitHub Actions Read-Only'
-          : 'GitHub App Setup Required',
-        tone: overview?.githubAppConfigured ? 'healthy' : 'degraded',
-      }}
+      description="Inspect read-only GitHub Actions workflows alongside CloudForge's persistent pipeline definitions, stage DAGs, and orchestrated runs."
+      phaseBadge={
+        activeTab === 'orchestration'
+          ? { label: 'Phase 3.2 · Pipeline Orchestration', tone: 'info' }
+          : {
+              label: overview?.githubAppConfigured
+                ? 'Phase 3.1 · GitHub Actions Read-Only'
+                : 'GitHub App Setup Required',
+              tone: overview?.githubAppConfigured ? 'healthy' : 'degraded',
+            }
+      }
       actions={
-        <div className="cf-inline-actions">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void handleRefreshLocalData()}
-            disabled={isInitialLoading || isRefreshingLocal}
-            title="Reload stored workflow and run records from CloudForge PostgreSQL"
-          >
-            <RefreshCw
-              size={14}
-              className={isRefreshingLocal ? 'cf-spin' : ''}
-              aria-hidden="true"
-            />
-            <span>{isRefreshingLocal ? 'Refreshing...' : 'Refresh Stored Data'}</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => void handleSyncFromGitHub()}
-            disabled={!canSyncSelectedRepo || isSyncingGitHub}
-            title={syncButtonTitle}
-          >
-            <CloudDownload
-              size={15}
-              className={isSyncingGitHub ? 'cf-spin' : ''}
-              aria-hidden="true"
-            />
-            <span>{isSyncingGitHub ? 'Syncing GitHub...' : 'Sync from GitHub'}</span>
-          </button>
-        </div>
+        activeTab === 'github-actions' ? (
+          <div className="cf-inline-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void handleRefreshLocalData()}
+              disabled={isInitialLoading || isRefreshingLocal}
+              title="Reload stored workflow and run records from CloudForge PostgreSQL"
+            >
+              <RefreshCw
+                size={14}
+                className={isRefreshingLocal ? 'cf-spin' : ''}
+                aria-hidden="true"
+              />
+              <span>{isRefreshingLocal ? 'Refreshing...' : 'Refresh Stored Data'}</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void handleSyncFromGitHub()}
+              disabled={!canSyncSelectedRepo || isSyncingGitHub}
+              title={syncButtonTitle}
+            >
+              <CloudDownload
+                size={15}
+                className={isSyncingGitHub ? 'cf-spin' : ''}
+                aria-hidden="true"
+              />
+              <span>{isSyncingGitHub ? 'Syncing GitHub...' : 'Sync from GitHub'}</span>
+            </button>
+          </div>
+        ) : undefined
       }
     >
+      {/* Clear top-level separation between GitHub Actions and CloudForge Orchestration */}
+      <div
+        className="cf-orch-tabs"
+        role="tablist"
+        aria-label="Pipeline workspace views"
+      >
+        <button
+          type="button"
+          role="tab"
+          id="tab-github-actions"
+          aria-selected={activeTab === 'github-actions'}
+          className={`cf-orch-tab ${activeTab === 'github-actions' ? 'cf-orch-tab--active' : ''}`}
+          onClick={() => handleTabChange('github-actions')}
+        >
+          <Github size={15} aria-hidden="true" />
+          <span>GitHub Actions</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-cloudforge-pipelines"
+          aria-selected={activeTab === 'orchestration'}
+          className={`cf-orch-tab ${activeTab === 'orchestration' ? 'cf-orch-tab--active' : ''}`}
+          onClick={() => handleTabChange('orchestration')}
+        >
+          <Workflow size={15} aria-hidden="true" />
+          <span>CloudForge Pipelines</span>
+        </button>
+      </div>
+
+      {activeTab === 'orchestration' ? (
+        <CloudForgePipelinesPanel />
+      ) : (
+        <>
       {toast && (
         <Toast
           message={toast.message}
@@ -1683,6 +1742,8 @@ export function PipelinesPage() {
           </div>
         )}
       </Modal>
+        </>
+      )}
     </PageContainer>
   );
 }

@@ -25,7 +25,7 @@ class FlywayMigrationTest {
     @Test
     void appliesAllMigrationsAndCreatesExpectedTables() {
         MigrationInfo[] applied = flyway.info().applied();
-        assertThat(applied).hasSizeGreaterThanOrEqualTo(3);
+        assertThat(applied).hasSizeGreaterThanOrEqualTo(4);
 
         List<String> expectedTables = List.of(
                 "users",
@@ -38,7 +38,13 @@ class FlywayMigrationTest {
                 "audit_events",
                 "webhook_deliveries",
                 "github_workflows",
-                "github_workflow_runs"
+                "github_workflow_runs",
+                "pipeline_definitions",
+                "pipeline_stage_definitions",
+                "pipeline_runs",
+                "pipeline_stage_runs",
+                "pipeline_run_events",
+                "pipeline_idempotency_keys"
         );
 
         for (String table : expectedTables) {
