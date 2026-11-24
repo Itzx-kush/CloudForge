@@ -78,5 +78,30 @@ class GitHubAppTokenServiceTest {
         });
         assertThat(afterEvict).isEqualTo("ghs_short_lived_3");
         assertThat(fetchCalls.get()).isEqualTo(2);
+
+        // Verify distinct caching per GitHubTokenScope and full eviction across scopes
+        String actionsToken = service.getOrFetchInstallationToken(777L, GitHubTokenScope.ACTIONS_READ, id -> {
+            fetchCalls.incrementAndGet();
+            return new GitHubInstallationToken("ghs_actions_read_1", fixedNow.plusSeconds(3600));
+        });
+        assertThat(actionsToken).isEqualTo("ghs_actions_read_1");
+        assertThat(fetchCalls.get()).isEqualTo(3);
+
+        // Cached metadata token remains untouched while actions token is cached separately
+        String stillMetadata = service.getOrFetchInstallationToken(777L, GitHubTokenScope.REPOSITORY_METADATA, id -> {
+            fetchCalls.incrementAndGet();
+            return new GitHubInstallationToken("should_not_refetch", fixedNow.plusSeconds(3600));
+        });
+        assertThat(stillMetadata).isEqualTo("ghs_short_lived_3");
+        assertThat(fetchCalls.get()).isEqualTo(3);
+
+        // Evicting installation clears BOTH scopes
+        service.evictInstallationToken(777L);
+        String refetchedActions = service.getOrFetchInstallationToken(777L, GitHubTokenScope.ACTIONS_READ, id -> {
+            fetchCalls.incrementAndGet();
+            return new GitHubInstallationToken("ghs_actions_read_2", fixedNow.plusSeconds(3600));
+        });
+        assertThat(refetchedActions).isEqualTo("ghs_actions_read_2");
+        assertThat(fetchCalls.get()).isEqualTo(4);
     }
 }

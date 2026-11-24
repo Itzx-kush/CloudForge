@@ -98,6 +98,12 @@ cloudforge:
     webhook-secret: ${GITHUB_WEBHOOK_SECRET:}
     api-base-url: ${GITHUB_API_BASE_URL:https://api.github.com}
     installation-callback-url: ${GITHUB_APP_CALLBACK_URL:http://localhost:5173/api/github/app/callback}
+    api-connect-timeout-seconds: ${GITHUB_API_CONNECT_TIMEOUT_SECONDS:5}
+    api-read-timeout-seconds: ${GITHUB_API_READ_TIMEOUT_SECONDS:10}
+    actions-sync-max-workflow-pages: ${GITHUB_ACTIONS_SYNC_MAX_WORKFLOW_PAGES:5}
+    actions-sync-max-runs-per-repo: ${GITHUB_ACTIONS_SYNC_MAX_RUNS_PER_REPO:50}
+    actions-sync-per-page: ${GITHUB_ACTIONS_SYNC_PER_PAGE:50}
+    actions-sync-max-job-pages: ${GITHUB_ACTIONS_SYNC_MAX_JOB_PAGES:3}
 
 logging:
   level:

@@ -23,9 +23,9 @@ class FlywayMigrationTest {
     private JdbcTemplate jdbcTemplate;
 
     @Test
-    void appliesAllPhase2MigrationsAndCreatesExpectedTables() {
+    void appliesAllMigrationsAndCreatesExpectedTables() {
         MigrationInfo[] applied = flyway.info().applied();
-        assertThat(applied).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(applied).hasSizeGreaterThanOrEqualTo(3);
 
         List<String> expectedTables = List.of(
                 "users",
@@ -36,7 +36,9 @@ class FlywayMigrationTest {
                 "projects",
                 "project_environments",
                 "audit_events",
-                "webhook_deliveries"
+                "webhook_deliveries",
+                "github_workflows",
+                "github_workflow_runs"
         );
 
         for (String table : expectedTables) {

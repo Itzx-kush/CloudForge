@@ -3,6 +3,15 @@ export type ProjectStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 export type EnvironmentType = 'DEVELOPMENT' | 'STAGING' | 'PRODUCTION';
 export type InstallationStatus = 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
 export type RepositoryConnectionStatus = 'CONNECTED' | 'SUSPENDED' | 'DISCONNECTED';
+export type WorkflowRunNormalizedStatus =
+  | 'QUEUED'
+  | 'IN_PROGRESS'
+  | 'SUCCESS'
+  | 'FAILURE'
+  | 'CANCELLED'
+  | 'TIMED_OUT'
+  | 'SKIPPED'
+  | 'UNKNOWN';
 
 export interface ApiErrorPayload {
   timestamp?: string;
@@ -188,4 +197,135 @@ export interface UpdateEnvironmentInput {
   branchOverride?: string | null;
   configVariables: Record<string, string>;
   notes?: string | null;
+}
+
+// --- Phase 3.1: Read-Only GitHub Actions Pipelines ---
+
+export interface PipelineRepositorySummary {
+  repositoryId: string;
+  fullName: string;
+  name: string;
+  ownerLogin: string;
+  defaultBranch: string;
+  visibility: string;
+  connectionStatus: RepositoryConnectionStatus;
+  installationStatus: InstallationStatus;
+  htmlUrl: string | null;
+  workflowCount: number;
+  runCount: number;
+  activeRunCount: number;
+  failedRunCount: number;
+  lastWorkflowSyncAt: string | null;
+  latestRunStatus: WorkflowRunNormalizedStatus | null;
+  latestRunAt: string | null;
+}
+
+export interface PipelineOverview {
+  workspaceId: string;
+  githubAppConfigured: boolean;
+  connectedRepositoryCount: number;
+  repositoriesWithWorkflowsCount: number;
+  workflowCount: number;
+  recentRunCount: number;
+  activeRunCount: number;
+  failedRunCount: number;
+  succeededRunCount: number;
+  lastSyncedAt: string | null;
+  repositories: PipelineRepositorySummary[];
+}
+
+export interface GitHubWorkflow {
+  id: string;
+  workspaceId: string;
+  repositoryId: string;
+  repositoryFullName: string;
+  githubWorkflowId: number;
+  name: string;
+  path: string;
+  state: string;
+  htmlUrl: string | null;
+  githubCreatedAt: string | null;
+  githubUpdatedAt: string | null;
+  lastSyncedAt: string;
+  latestRunId: string | null;
+  latestRunNumber: number | null;
+  latestRunStatus: WorkflowRunNormalizedStatus | null;
+  latestRunGithubStatus: string | null;
+  latestRunConclusion: string | null;
+  latestRunAt: string | null;
+}
+
+export interface GitHubWorkflowRun {
+  id: string;
+  workspaceId: string;
+  repositoryId: string;
+  repositoryFullName: string;
+  workflowId: string | null;
+  githubRunId: number;
+  githubWorkflowId: number;
+  runNumber: number;
+  runAttempt: number;
+  workflowName: string;
+  displayTitle: string | null;
+  event: string;
+  headBranch: string | null;
+  headSha: string | null;
+  githubStatus: string;
+  githubConclusion: string | null;
+  normalizedStatus: WorkflowRunNormalizedStatus;
+  actorLogin: string | null;
+  actorAvatarUrl: string | null;
+  htmlUrl: string | null;
+  githubCreatedAt: string | null;
+  githubUpdatedAt: string | null;
+  runStartedAt: string | null;
+  durationSeconds: number | null;
+  lastSyncedAt: string;
+}
+
+export interface GitHubWorkflowStep {
+  number: number;
+  name: string;
+  githubStatus: string;
+  githubConclusion: string | null;
+  normalizedStatus: WorkflowRunNormalizedStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationSeconds: number | null;
+}
+
+export interface GitHubWorkflowJob {
+  githubJobId: number;
+  githubRunId: number;
+  runAttempt: number;
+  name: string;
+  githubStatus: string;
+  githubConclusion: string | null;
+  normalizedStatus: WorkflowRunNormalizedStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationSeconds: number | null;
+  htmlUrl: string | null;
+  runnerName: string | null;
+  steps: GitHubWorkflowStep[];
+}
+
+export interface WorkflowRunJobsResponse {
+  runId: string;
+  githubRunId: number;
+  repositoryId: string;
+  repositoryFullName: string;
+  fetchedAt: string;
+  jobs: GitHubWorkflowJob[];
+}
+
+export interface GitHubActionsSyncResponse {
+  repositoryId: string;
+  repositoryFullName: string;
+  workflowsSynced: number;
+  runsSynced: number;
+  runsCreated: number;
+  runsUpdated: number;
+  syncedAt: string;
+  message: string;
 }

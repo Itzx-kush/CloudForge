@@ -46,7 +46,7 @@ public class GitHubAppTokenService {
 
     private final AppProperties appProperties;
     private final Clock clock;
-    private final ConcurrentHashMap<Long, CachedInstallationToken> tokenCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<TokenCacheKey, CachedInstallationToken> tokenCache = new ConcurrentHashMap<>();
 
     @Autowired
     public GitHubAppTokenService(AppProperties appProperties) {
@@ -101,8 +101,21 @@ public class GitHubAppTokenService {
             long githubInstallationId,
             Function<Long, GitHubInstallationToken> fetcher
     ) {
+        return getOrFetchInstallationToken(
+                githubInstallationId,
+                GitHubTokenScope.REPOSITORY_METADATA,
+                fetcher
+        );
+    }
+
+    public String getOrFetchInstallationToken(
+            long githubInstallationId,
+            GitHubTokenScope scope,
+            Function<Long, GitHubInstallationToken> fetcher
+    ) {
         Instant now = Instant.now(clock);
-        CachedInstallationToken existing = tokenCache.get(githubInstallationId);
+        TokenCacheKey key = new TokenCacheKey(githubInstallationId, scope);
+        CachedInstallationToken existing = tokenCache.get(key);
         if (existing != null && existing.expiresAt().isAfter(now.plus(TOKEN_REFRESH_MARGIN))) {
             return existing.token();
         }
@@ -116,12 +129,18 @@ public class GitHubAppTokenService {
         }
 
         Instant expiresAt = fresh.expiresAt() != null ? fresh.expiresAt() : now.plus(Duration.ofMinutes(50));
-        tokenCache.put(githubInstallationId, new CachedInstallationToken(fresh.token(), expiresAt));
+        tokenCache.put(key, new CachedInstallationToken(fresh.token(), expiresAt));
         return fresh.token();
     }
 
     public void evictInstallationToken(long githubInstallationId) {
-        tokenCache.remove(githubInstallationId);
+        for (GitHubTokenScope scope : GitHubTokenScope.values()) {
+            tokenCache.remove(new TokenCacheKey(githubInstallationId, scope));
+        }
+    }
+
+    public void evictInstallationToken(long githubInstallationId, GitHubTokenScope scope) {
+        tokenCache.remove(new TokenCacheKey(githubInstallationId, scope));
     }
 
     public RSAPrivateKey parseRsaPrivateKey(String rawPem) {
@@ -190,6 +209,9 @@ public class GitHubAppTokenService {
                 HttpStatus.SERVICE_UNAVAILABLE,
                 "GitHub App private key is not configured"
         );
+    }
+
+    private record TokenCacheKey(long githubInstallationId, GitHubTokenScope scope) {
     }
 
     private record CachedInstallationToken(String token, Instant expiresAt) {

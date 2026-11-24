@@ -159,6 +159,7 @@ public class ProjectEnvironmentService {
             UpdateEnvironmentRequest request,
             UserEntity user
     ) {
+        authorizationService.requireMembership(workspaceId, user.getId());
         ProjectEntity project = ensureProjectInWorkspace(workspaceId, projectId);
         ProjectEnvironmentEntity env = environmentRepository.findByIdAndProjectId(environmentId, projectId)
                 .orElseThrow(() -> new ResourceNotFoundException("Project environment not found"));

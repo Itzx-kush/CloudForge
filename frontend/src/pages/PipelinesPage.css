@@ -1,0 +1,514 @@
+/* CloudForge Phase 3.1 — Pipelines Dashboard Styles
+ * Built strictly on existing tokens.css variables so Dark, Light, System,
+ * all 5 accents, density modes, and reduced-motion preferences work seamlessly.
+ */
+
+/* Action sync status strip */
+.cf-pipelines-meta-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.cf-pipelines-meta-bar__group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-width: 0;
+}
+
+.cf-pipelines-meta-bar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cf-pipelines-meta-bar__item svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* Stat tiles highlight subtle accents */
+.cf-pipelines-stats .cf-stat-tile {
+  transition: border-color var(--transition-fast), transform var(--transition-fast), background-color var(--transition-base);
+}
+
+.cf-pipelines-stats .cf-stat-tile:hover {
+  border-color: var(--border-default);
+}
+
+.cf-stat-tile--alert {
+  border-color: var(--status-error-border);
+}
+
+.cf-stat-tile--active {
+  border-color: var(--status-info-border);
+}
+
+.cf-stat-tile__split {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Repository Selector Bar */
+.cf-repo-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cf-repo-selector__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cf-repo-selector__select-wrap {
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cf-repo-selector__select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-code);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: border-color var(--transition-fast);
+}
+
+.cf-repo-selector__select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.cf-repo-summary-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  animation: cf-enter var(--transition-base);
+}
+
+.cf-repo-summary-strip__info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cf-repo-summary-strip__title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cf-repo-summary-strip__details {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Filter chips & pills */
+.cf-filter-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.cf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-accent);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.cf-chip__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0;
+}
+
+.cf-chip__clear:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+/* Table loading subtle overlay & row polish */
+.cf-table-loading {
+  opacity: 0.62;
+  transition: opacity var(--transition-fast);
+}
+
+.cf-pipelines-link-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-primary);
+  font-weight: 600;
+  font-size: 13.5px;
+  text-align: left;
+  max-width: 100%;
+  transition: color var(--transition-fast);
+}
+
+.cf-pipelines-link-btn:hover {
+  text-decoration: underline;
+}
+
+.cf-pipelines-subtext {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  display: block;
+}
+
+.cf-run-sha-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cf-run-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.cf-run-sha {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.cf-event-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.cf-attempt-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-elevated);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+/* Spin feedback animation (suppressed automatically under reduced-motion in global.css) */
+.cf-spin {
+  animation: cf-pipelines-spin 900ms linear infinite;
+}
+
+@keyframes cf-pipelines-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Workflow Run Details Modal & Expandable Jobs / Steps */
+.cf-run-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cf-run-detail-header-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.cf-jobs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cf-jobs-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cf-jobs-section__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cf-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cf-job-card {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.cf-job-card--expanded {
+  border-color: var(--border-default);
+}
+
+.cf-job-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+}
+
+.cf-job-card__toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.cf-job-card__chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.cf-job-card--expanded .cf-job-card__chevron {
+  transform: rotate(90deg);
+}
+
+.cf-job-card__meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cf-job-steps {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-code);
+  padding: 8px 14px 12px;
+  animation: cf-enter var(--transition-fast);
+}
+
+.cf-job-steps__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cf-job-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  transition: background var(--transition-fast);
+}
+
+.cf-job-step:hover {
+  background: var(--bg-surface-elevated);
+}
+
+.cf-job-step__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cf-job-step__num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 22px;
+}
+
+.cf-job-step__name {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.cf-job-step__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* Empty State Box */
+.cf-empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 20px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-default);
+  background: var(--bg-code);
+}
+
+.cf-empty-panel__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cf-empty-panel__desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Mobile polish (768px, 430px, 390px, 360px) */
+@media (max-width: 768px) {
+  .cf-pipelines-meta-bar {
+    padding: 10px 12px;
+  }
+
+  .cf-repo-selector__controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cf-repo-selector__select {
+    font-size: 16px;
+    min-height: 42px;
+  }
+
+  .cf-job-card__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .cf-job-card__meta {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .cf-job-step {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .cf-page__actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .cf-page__actions .btn {
+    flex: 1 1 auto;
+    min-height: 42px;
+  }
+
+  .cf-repo-summary-strip {
+    padding: 12px;
+  }
+}

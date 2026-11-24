@@ -487,4 +487,81 @@ class GitHubAppAndRepositoriesIntegrationTest {
         assertThat(installationRepository.findByGithubInstallationId(ghInstallId)).isEmpty();
         assertThat(installationRepository.findByGithubInstallationId(foreignInstallId)).isEmpty();
     }
+
+    @Test
+    void rejectsUnverifiedNewOrganizationAndUnknownAccountTypeInstallationsWhilePreservingAlreadyLinkedOrg() throws Exception {
+        long unverifiedOrgInstallId = 55601L;
+        when(gitHubApiClient.getInstallation(unverifiedOrgInstallId)).thenReturn(
+                new GitHubInstallationDetails(
+                        unverifiedOrgInstallId,
+                        880001L,
+                        "victim-org",
+                        "Organization",
+                        null,
+                        "all",
+                        false,
+                        null
+                )
+        );
+
+        // 1. New Organization installation is rejected even when a valid self-issued state token is provided
+        MockHttpSession orgWithStateSession = new MockHttpSession();
+        MvcResult orgUrlRes = mockMvc.perform(
+                        post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                                .session(orgWithStateSession)
+                                .with(authenticatedUser(owner))
+                                .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn();
+        String validState = URI.create(objectMapper.readTree(orgUrlRes.getResponse().getContentAsString())
+                .path("installUrl").asText()).getQuery().replace("state=", "");
+
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(orgWithStateSession)
+                        .param("installation_id", String.valueOf(unverifiedOrgInstallId))
+                        .param("setup_action", "install")
+                        .param("state", validState)
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+        assertThat(installationRepository.findByGithubInstallationId(unverifiedOrgInstallId)).isEmpty();
+
+        // 2. New Organization installation without state is also rejected
+        MockHttpSession orgNoStateSession = new MockHttpSession();
+        mockMvc.perform(post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                        .session(orgNoStateSession)
+                        .with(authenticatedUser(owner))
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(orgNoStateSession)
+                        .param("installation_id", String.valueOf(unverifiedOrgInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+        assertThat(installationRepository.findByGithubInstallationId(unverifiedOrgInstallId)).isEmpty();
+
+        // 3. Unknown account type is rejected
+        long botInstallId = 55602L;
+        when(gitHubApiClient.getInstallation(botInstallId)).thenReturn(
+                new GitHubInstallationDetails(botInstallId, 880002L, "weird-bot", "Bot", null, "selected", false, null)
+        );
+        MockHttpSession botSession = new MockHttpSession();
+        mockMvc.perform(post("/api/workspaces/{ws}/github/install-url", ownerWorkspace.getId())
+                        .session(botSession)
+                        .with(authenticatedUser(owner))
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/github/app/callback")
+                        .session(botSession)
+                        .param("installation_id", String.valueOf(botInstallId))
+                        .param("setup_action", "install")
+                        .with(authenticatedUser(owner)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "http://localhost:5173/repositories?installation_error=forbidden"));
+        assertThat(installationRepository.findByGithubInstallationId(botInstallId)).isEmpty();
+    }
 }

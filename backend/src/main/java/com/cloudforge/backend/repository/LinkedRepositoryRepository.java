@@ -79,6 +79,16 @@ public interface LinkedRepositoryRepository
 
     List<LinkedRepositoryEntity> findAllByInstallationId(UUID installationId);
 
+    @Query("""
+            SELECT lr FROM LinkedRepositoryEntity lr
+            JOIN FETCH lr.installation gi
+            WHERE lr.workspace.id = :workspaceId
+            ORDER BY LOWER(lr.fullName) ASC
+            """)
+    List<LinkedRepositoryEntity> findAllByWorkspaceIdWithInstallationOrderByFullNameAsc(
+            @Param("workspaceId") UUID workspaceId
+    );
+
     Optional<LinkedRepositoryEntity> findByWorkspaceIdAndGithubRepoId(UUID workspaceId, Long githubRepoId);
 
     List<LinkedRepositoryEntity> findAllByGithubRepoId(Long githubRepoId);

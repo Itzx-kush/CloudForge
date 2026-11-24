@@ -1,4 +1,4 @@
-# CloudForge GitHub Integration Setup Guide (Phase 2)
+# CloudForge GitHub Integration Setup Guide (Phase 2 & Phase 3.1)
 
 CloudForge separates **user authentication** (**GitHub OAuth App**) from **repository discovery and lifecycle synchronization** (**GitHub App**). This separation enforces least-privilege access: user sign-in only asks for identity scopes (`read:user`, `user:email`), while repository metadata access uses short-lived, installation-scoped GitHub App tokens and HMAC-SHA256 verified webhooks.
 
@@ -67,9 +67,11 @@ CloudForge does **not** request `repo` or `admin:org` OAuth scopes. GitHub OAuth
    - **Active:** Checked (if testing live webhook delivery via a tunnel; optional for local-only pull sync).
    - **Webhook URL:** `https://<your-public-tunnel-or-domain>/api/webhooks/github`
    - **Webhook secret:** Generate a strong random secret (e.g., `openssl rand -hex 32`) and save the exact value in `GITHUB_WEBHOOK_SECRET` in `.env`.
-4. Configure **Least-Privilege Repository Permissions** (Phase 2):
+4. Configure **Least-Privilege Repository Permissions** (Phase 2 + Phase 3.1):
    - **Metadata:** `Read-only` *(mandatory, automatically enabled — used to discover and synchronize authorized repositories)*
-   - Leave **Contents**, **Administration**, **Actions**, **Deployments**, **Issues**, and **Pull requests** as **No access** for Phase 2. CloudForge does not clone, build, or execute repository code in Phase 2.
+   - **Actions:** `Read-only` *(required for Phase 3.1 read-only workflow discovery, workflow-run history, and job/step inspection on the Pipelines dashboard; never grant `Read and write`)*
+   - Leave **Contents**, **Workflows**, **Administration**, **Deployments**, **Issues**, and **Pull requests** as **No access**. CloudForge does not dispatch workflows, clone, build, or execute repository code in Phase 3.1.
+   - *Upgrading an existing Phase 2 GitHub App:* After changing **Actions** from **No access** to **Read-only** in your GitHub App settings, approve the permission update request on each existing installation in **GitHub → Settings → Applications → Installed GitHub Apps**. Until approved, repository discovery (`metadata: read`) keeps working while Pipelines sync returns a `403` permission guidance banner.
 5. Subscribe to **Phase 2 Lifecycle Webhook Events**:
    - `Meta` / `Ping` (automatic)
    - `Installation` (tracks app suspension, unsuspension, and deletion)
@@ -131,5 +133,5 @@ Because `localhost:5173` / `127.0.0.1:8080` is not publicly reachable from GitHu
   - End-to-end live sign-in and live GitHub App installation against `github.com` require registering your own GitHub OAuth App and GitHub App credentials in `.env` and have **not** been claimed as live-tested without real credentials.
 - **No Plaintext Secret Manager in Phase 2:** Project environment configuration intentionally supports **non-secret variables only** and actively rejects secret-like keys (`*SECRET*`, `*PASSWORD*`, `*TOKEN*`, `*PRIVATE_KEY*`, `*API_KEY*`) and credential patterns (`ghp_*`, PEM blocks). Encrypted secret storage (KMS / External Secrets Manager) is deferred to Phases 3–4.
 - **No Code Execution, Builds, or Deployments in Phase 2:** Neither repository linking, environment updates, nor GitHub webhook deliveries execute repository code or trigger deployments. Isolated rootless build workers and Kubernetes rollouts are deferred to Phase 3.
-- **Organization Installation Ownership:** Personal (`User`) GitHub App installations enforce matching GitHub user ID / login ownership on callback. Organization installations require an authenticated CloudForge workspace `OWNER` with a valid single-use session state token; fine-grained GitHub organization admin membership checks can be expanded in a future phase if multi-organization SSO is introduced.
+- **Organization Installation Ownership (Fail-Closed in Phase 3.1):** Personal (`User`) GitHub App installations enforce strict matching GitHub user ID ownership on callback. Attaching **new** unverified `Organization` installations fails closed (`403 Forbidden`) until GitHub App user-to-server installation verification (`Request user authorization (OAuth) during installation` + `GET /user/installations`) is implemented, preventing unauthorized organization attachment without broadening OAuth scopes (`admin:org`/`read:org`). Already-linked workspace installations remain refreshable by workspace `OWNER`s.
 - **HTTPS Production Requirement:** For any non-localhost deployment, run behind TLS/HTTPS and set `CLOUDFORGE_COOKIE_SECURE=true`, update `CLOUDFORGE_FRONTEND_BASE_URL` and `CLOUDFORGE_ALLOWED_REDIRECT_ORIGINS`, and store secrets in a dedicated secret manager rather than `.env` files.

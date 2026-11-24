@@ -189,6 +189,30 @@ public class AppProperties {
         private String apiBaseUrl = "https://api.github.com";
         private String installationCallbackUrl = "http://localhost:5173/api/github/app/callback";
 
+        @Min(1)
+        @Max(30)
+        private int apiConnectTimeoutSeconds = 5;
+
+        @Min(1)
+        @Max(60)
+        private int apiReadTimeoutSeconds = 10;
+
+        @Min(1)
+        @Max(20)
+        private int actionsSyncMaxWorkflowPages = 5;
+
+        @Min(1)
+        @Max(200)
+        private int actionsSyncMaxRunsPerRepo = 50;
+
+        @Min(1)
+        @Max(100)
+        private int actionsSyncPerPage = 50;
+
+        @Min(1)
+        @Max(10)
+        private int actionsSyncMaxJobPages = 3;
+
         public String getAppId() {
             return appId;
         }
@@ -243,6 +267,54 @@ public class AppProperties {
 
         public void setInstallationCallbackUrl(String installationCallbackUrl) {
             this.installationCallbackUrl = installationCallbackUrl;
+        }
+
+        public int getApiConnectTimeoutSeconds() {
+            return apiConnectTimeoutSeconds;
+        }
+
+        public void setApiConnectTimeoutSeconds(int apiConnectTimeoutSeconds) {
+            this.apiConnectTimeoutSeconds = apiConnectTimeoutSeconds;
+        }
+
+        public int getApiReadTimeoutSeconds() {
+            return apiReadTimeoutSeconds;
+        }
+
+        public void setApiReadTimeoutSeconds(int apiReadTimeoutSeconds) {
+            this.apiReadTimeoutSeconds = apiReadTimeoutSeconds;
+        }
+
+        public int getActionsSyncMaxWorkflowPages() {
+            return actionsSyncMaxWorkflowPages;
+        }
+
+        public void setActionsSyncMaxWorkflowPages(int actionsSyncMaxWorkflowPages) {
+            this.actionsSyncMaxWorkflowPages = actionsSyncMaxWorkflowPages;
+        }
+
+        public int getActionsSyncMaxRunsPerRepo() {
+            return actionsSyncMaxRunsPerRepo;
+        }
+
+        public void setActionsSyncMaxRunsPerRepo(int actionsSyncMaxRunsPerRepo) {
+            this.actionsSyncMaxRunsPerRepo = actionsSyncMaxRunsPerRepo;
+        }
+
+        public int getActionsSyncPerPage() {
+            return actionsSyncPerPage;
+        }
+
+        public void setActionsSyncPerPage(int actionsSyncPerPage) {
+            this.actionsSyncPerPage = actionsSyncPerPage;
+        }
+
+        public int getActionsSyncMaxJobPages() {
+            return actionsSyncMaxJobPages;
+        }
+
+        public void setActionsSyncMaxJobPages(int actionsSyncMaxJobPages) {
+            this.actionsSyncMaxJobPages = actionsSyncMaxJobPages;
         }
 
         public boolean hasPrivateKeyMaterial() {

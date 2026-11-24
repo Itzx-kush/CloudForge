@@ -1,13 +1,13 @@
 # CloudForge Architecture
 
-This document describes the **implemented Phase 1 & Phase 2 architecture** alongside the **planned target architecture** for Phases 3–4. Every section explicitly distinguishes what is live today from what is planned.
+This document describes the **implemented Phase 1, Phase 2 & Phase 3.1 architecture** alongside the **planned target architecture** for Phases 3.2–4. Every section explicitly distinguishes what is live today from what is planned.
 
 ---
 
 ## 1. Architectural Principles
 
 1. **Clear Separation of Concerns:** The React control-plane UI, Java 17 Spring Boot API, PostgreSQL 17 data layer, and GitHub integration layer communicate through explicit HTTP/JSON, OAuth 2.0, GitHub App JWT, and JDBC contracts.
-2. **Identity vs. Repository Authorization Separation:** GitHub OAuth 2.0 handles user identity (`read:user`, `user:email`), whereas a dedicated GitHub App handles least-privilege repository discovery via short-lived installation tokens (`metadata: read`) and HMAC-SHA256 verified webhooks.
+2. **Identity vs. Repository Authorization Separation:** GitHub OAuth 2.0 handles user identity (`read:user`, `user:email`), whereas a dedicated GitHub App handles least-privilege repository discovery (`metadata: read`) and read-only GitHub Actions telemetry (`actions: read`) via short-lived scoped installation tokens and HMAC-SHA256 verified webhooks.
 3. **Defense-in-Depth & Backend-Enforced Authorization:** Every workspace-scoped API verifies server-side session authentication, CSRF tokens (for mutations), workspace membership, and RBAC roles (`OWNER`, `DEVELOPER`, `VIEWER`) on the backend — never relying on frontend visibility alone.
 4. **No Arbitrary Repository Execution or Plaintext Secrets:** Phase 2 persists non-secret environment configuration only and never executes repository code or triggers builds/deployments.
 5. **Versioned, Non-Destructive Persistence:** Flyway manages all PostgreSQL schema evolution (`ddl-auto: none` in runtime, `validate` in test profile), preserving the existing Docker volume cleanly.
@@ -39,28 +39,31 @@ flowchart LR
 6. `POST /api/auth/logout` logs `USER_LOGOUT`, invalidates the server-side `HttpSession`, clears `SecurityContext`, and expires session/CSRF cookies.
 7. `GET /api/health` and `GET /actuator/health` remain publicly accessible without exposing credentials or internal details.
 
-### 2.3 GitHub App & Webhook Architecture
+### 2.3 GitHub App, Actions Integration & Webhook Architecture
 
-- **`GitHubAppTokenService`:** Loads the RSA private key (PKCS#1 or PKCS#8 PEM via BouncyCastle), signs RS256 App JWTs (9-minute lifetime, 60-second clock-drift buffer) via Nimbus JOSE+JWT, and caches short-lived installation access tokens strictly in memory with automatic refresh/eviction.
+- **`GitHubAppTokenService`:** Loads the RSA private key (PKCS#1 or PKCS#8 PEM via BouncyCastle), signs RS256 App JWTs (9-minute lifetime, 60-second clock-drift buffer) via Nimbus JOSE+JWT, and caches short-lived installation access tokens strictly in memory keyed by `(installationId, GitHubTokenScope)` with automatic refresh/eviction across scopes.
 - **`GitHubIntegrationService`:**
   - `POST /api/workspaces/{workspaceId}/github/install-url` (`OWNER` only) stores a single-use 32-byte CSPRNG `state` bound to `(workspaceId, userId)` in the HTTP session and returns the GitHub App install URL.
-  - `GET /api/github/app/callback` consumes the single-use `state`, verifies `OWNER` authorization and installation ownership (preventing cross-workspace and cross-user personal installation hijacking), persists `github_installations`, and synchronizes authorized repositories into `linked_repositories`.
+  - `GET /api/github/app/callback` consumes the single-use `state`, verifies `OWNER` authorization and installation ownership (enforcing strict personal account ID matching and failing closed on unverified new Organization installations until user-to-server `/user/installations` verification is added), persists `github_installations`, and synchronizes authorized repositories into `linked_repositories`.
   - Handles revoked (`404`), suspended (`403`), and rate-limited (`429` / `X-RateLimit-Remaining: 0`) GitHub responses cleanly.
+- **`GitHubActionsSyncService` & `PipelineService` (Phase 3.1 Read-Only):**
+  - Pull-synchronizes GitHub Actions workflows and recent runs using `ACTIONS_READ` scoped tokens (`metadata: read`, `actions: read`) outside open database transactions, persists records idempotently into `github_workflows` and `github_workflow_runs`, protects against overlapping per-repository syncs, and fetches live ordered job/step breakdowns on demand (`GET /api/workspaces/{workspaceId}/workflow-runs/{runId}/jobs`).
+  - See `docs/PHASE3_1_GITHUB_ACTIONS.md` for full endpoint, RBAC, and error-handling specifications.
 - **`GitHubWebhookController` & `GitHubWebhookService` (`POST /api/webhooks/github`):**
   - Reads exact raw payload bytes (`byte[]`) and verifies `X-Hub-Signature-256` with HMAC-SHA256 and `MessageDigest.isEqual` (constant-time).
-  - Deduplicates deliveries using `X-GitHub-Delivery` against the unique `webhook_deliveries.delivery_id` table.
+  - Atomically claims `X-GitHub-Delivery` via `INSERT ... ON CONFLICT DO NOTHING` in `webhook_deliveries` prior to executing side effects so concurrent duplicate deliveries cannot duplicate state changes or abort PostgreSQL transactions.
   - Handles `ping`, `installation`, `installation_repositories`, and `repository` lifecycle events; safely ignores unsupported events (such as `push`) with `202 Accepted` without triggering builds or deployments.
 
 ### 2.4 Backend Package Structure (`com.cloudforge.backend`)
 
 | Package | Responsibility |
 | --- | --- |
-| `controller` | REST APIs (`HealthController`, `AuthController`, `WorkspaceController`, `ProjectController`, `GitHubIntegrationController`, `GitHubWebhookController`, `AuditEventController`). |
-| `service` | Domain logic (`HealthService`, `UserAccountService`, `WorkspaceAuthorizationService`, `WorkspaceService`, `ProjectService`, `ProjectEnvironmentService`, `GitHubIntegrationService`, `GitHubWebhookService`, `AuditService`, `AuditQueryService`). |
-| `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`). |
+| `controller` | REST APIs (`HealthController`, `AuthController`, `WorkspaceController`, `ProjectController`, `GitHubIntegrationController`, `PipelineController`, `GitHubWebhookController`, `AuditEventController`, `SpaPageController`). |
+| `service` | Domain logic (`HealthService`, `UserAccountService`, `WorkspaceAuthorizationService`, `WorkspaceService`, `ProjectService`, `ProjectEnvironmentService`, `GitHubIntegrationService`, `GitHubActionsSyncService`, `PipelineService`, `GitHubWebhookService`, `AuditService`, `AuditQueryService`). |
+| `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubTokenScope`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`, typed metadata DTOs & integration exceptions). |
 | `security` | Spring Security filter chain, OAuth 2.0 user service, success/failure handlers, `CloudForgeUserPrincipal`, `RedirectOriginValidator`, SPA CSRF handler/filter, JSON 401/403 handlers. |
-| `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 9 Phase 2 JPA entities + enums. |
-| `repository` | `DatabaseProbeRepository` + 9 Spring Data JPA repositories with workspace-scoped `JOIN FETCH` queries. |
+| `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 11 domain JPA entities + enums (including `GitHubWorkflowEntity`, `GitHubWorkflowRunEntity`, `WorkflowRunNormalizedStatus`). |
+| `repository` | `DatabaseProbeRepository` + 11 Spring Data JPA repositories with workspace-scoped `JOIN FETCH` and typed Criteria queries. |
 | `dto` | Immutable Java 17 request/response records with Bean Validation constraints. |
 | `config` | `AppProperties` (CORS, Auth, GitHub App), `WebConfig`, `RequestCorrelationFilter`. |
 | `exception` | `GlobalExceptionHandler` + typed domain/integration exceptions returning structured `ApiErrorResponse`. |
@@ -70,14 +73,15 @@ flowchart LR
 Located under `backend/src/main/resources/db/migration/`:
 - **`V1__phase2_core_schema.sql`:** `users`, `workspaces`, `workspace_members`, `github_installations`, `linked_repositories`, `projects`, `project_environments`, `audit_events` with UUID primary keys, foreign keys, role/status check constraints, unique constraints, and query indexes.
 - **`V2__webhook_deliveries.sql`:** `webhook_deliveries` for idempotent webhook processing and SHA-256 payload fingerprinting without storing sensitive payload bodies.
+- **`V3__github_actions_workflows.sql`:** `github_workflows` and `github_workflow_runs` storing non-sensitive GitHub Actions workflow definitions and execution attempts keyed by `(linked_repository_id, github_run_id, run_attempt)`.
 
 ### 2.6 Frontend Architecture (`frontend/`)
 
-- **Framework:** React 19, TypeScript (strict mode), Vite, React Router 7.
+- **Framework:** React 19, TypeScript (strict mode), Vite, React Router 7, Obsidian-inspired theme & appearance system (`PreferenceProvider` supporting Dark/Light/System themes, 5 accent palettes, density, and reduced-motion).
 - **State & Auth:** `AuthContext` manages session verification (`/api/auth/me`, `/api/auth/config`), active workspace selection, role awareness, and CSRF-protected logout; `ProtectedRoute` guards authenticated views cleanly.
-- **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, structured `ApiClientError` handling, and preserved Phase 1 live `/api/health` probing.
-- **Live Phase 2 Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), `SettingsPage` (profile, workspace/member RBAC, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
-- **Future-Phase Blueprint Pages:** `DeploymentsPage` (Phase 3) and `PipelinesPage` (Phases 3–4) remain clearly labeled as planned capabilities.
+- **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, structured `ApiClientError` handling (including `Retry-After` rate-limit parsing), and preserved Phase 1 live `/api/health` probing.
+- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage` (Phase 3.1 live GitHub Actions workflows, execution history, sync vs. refresh controls, and Run Details modal with live jobs/steps)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
+- **Future-Phase Blueprint Pages:** `DeploymentsPage` (Phases 3.5–3.7) remains clearly labeled as a planned capability.
 
 ---
 
