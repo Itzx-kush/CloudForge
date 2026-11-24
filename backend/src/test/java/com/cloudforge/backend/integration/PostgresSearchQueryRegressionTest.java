@@ -1,17 +1,23 @@
 package com.cloudforge.backend.integration;
 
 import com.cloudforge.backend.entity.GitHubInstallationEntity;
+import com.cloudforge.backend.entity.GitHubWorkflowEntity;
+import com.cloudforge.backend.entity.GitHubWorkflowRunEntity;
 import com.cloudforge.backend.entity.InstallationStatus;
 import com.cloudforge.backend.entity.LinkedRepositoryEntity;
 import com.cloudforge.backend.entity.ProjectEntity;
 import com.cloudforge.backend.entity.ProjectStatus;
 import com.cloudforge.backend.entity.RepositoryConnectionStatus;
 import com.cloudforge.backend.entity.UserEntity;
+import com.cloudforge.backend.entity.WorkflowRunNormalizedStatus;
 import com.cloudforge.backend.entity.WorkspaceEntity;
 import com.cloudforge.backend.repository.AuditEventRepository;
 import com.cloudforge.backend.repository.GitHubInstallationRepository;
+import com.cloudforge.backend.repository.GitHubWorkflowRepository;
+import com.cloudforge.backend.repository.GitHubWorkflowRunRepository;
 import com.cloudforge.backend.repository.LinkedRepositoryRepository;
 import com.cloudforge.backend.repository.ProjectRepository;
+import com.cloudforge.backend.repository.WebhookDeliveryRepository;
 import com.cloudforge.backend.repository.WorkspaceMemberRepository;
 import com.cloudforge.backend.service.AuditService;
 import com.cloudforge.backend.service.UserAccountService;
@@ -61,8 +67,9 @@ class PostgresSearchQueryRegressionTest {
         registry.add("spring.datasource.username", PostgresAvailableCondition::resolveUser);
         registry.add("spring.datasource.password", PostgresAvailableCondition::resolvePassword);
         registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
-        // Never mutate or reset existing database schema; validate against existing Flyway-managed schema.
-        registry.add("spring.flyway.enabled", () -> "false");
+        // Never mutate or reset an existing local database unless explicitly opted in (e.g., ephemeral CI container).
+        boolean runFlyway = "true".equalsIgnoreCase(System.getenv("TEST_POSTGRES_RUN_FLYWAY"));
+        registry.add("spring.flyway.enabled", () -> String.valueOf(runFlyway));
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.jpa.properties.hibernate.boot.allow_jdbc_metadata_access", () -> "true");
         registry.add("spring.jpa.properties.jakarta.persistence.database-product-name", () -> "PostgreSQL");
@@ -95,10 +102,20 @@ class PostgresSearchQueryRegressionTest {
     @Autowired
     private AuditService auditService;
 
+    @Autowired
+    private GitHubWorkflowRepository workflowRepository;
+
+    @Autowired
+    private GitHubWorkflowRunRepository workflowRunRepository;
+
+    @Autowired
+    private WebhookDeliveryRepository webhookDeliveryRepository;
+
     private UserEntity ownerA;
     private UserEntity ownerB;
     private WorkspaceEntity workspaceA;
     private WorkspaceEntity workspaceB;
+    private LinkedRepositoryEntity repoA1;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -132,7 +149,7 @@ class PostgresSearchQueryRegressionTest {
         instB.setStatus(InstallationStatus.ACTIVE);
         instB = installationRepository.save(instB);
 
-        LinkedRepositoryEntity repoA1 = saveRepo(
+        repoA1 = saveRepo(
                 workspaceA, instA, 991001L, "pg-org-a", "payments-api",
                 "private", "Handles 100% of checkout payments", RepositoryConnectionStatus.CONNECTED
         );
@@ -261,6 +278,82 @@ class PostgresSearchQueryRegressionTest {
                         .with(authenticatedUser(ownerA)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(org.hamcrest.Matchers.greaterThanOrEqualTo(2)));
+    }
+
+    @Test
+    void githubActionsWorkflowsRunsAndAtomicWebhookClaimWorkOnPostgreSql() throws Exception {
+        Instant now = Instant.now();
+
+        GitHubWorkflowEntity wf = new GitHubWorkflowEntity();
+        wf.setWorkspace(workspaceA);
+        wf.setLinkedRepository(repoA1);
+        wf.setGithubWorkflowId(888001L);
+        wf.setName("Build 100% Verified");
+        wf.setPath(".github/workflows/ci.yml");
+        wf.setState("active");
+        wf.setHtmlUrl("https://github.com/pg-org-a/payments-api/blob/main/.github/workflows/ci.yml");
+        wf.setLastSyncedAt(now);
+        wf = workflowRepository.save(wf);
+
+        GitHubWorkflowRunEntity run = new GitHubWorkflowRunEntity();
+        run.setWorkspace(workspaceA);
+        run.setLinkedRepository(repoA1);
+        run.setWorkflow(wf);
+        run.setGithubRunId(999001L);
+        run.setGithubWorkflowId(888001L);
+        run.setRunNumber(77);
+        run.setRunAttempt(1);
+        run.setWorkflowName("Build 100% Verified");
+        run.setDisplayTitle("Fix 100% coverage");
+        run.setEvent("push");
+        run.setHeadBranch("main");
+        run.setHeadSha("abcdef1234567");
+        run.setGithubStatus("completed");
+        run.setGithubConclusion("success");
+        run.setNormalizedStatus(WorkflowRunNormalizedStatus.SUCCESS);
+        run.setActorLogin("pg-test-owner-a");
+        run.setGithubCreatedAt(now.minusSeconds(120));
+        run.setGithubUpdatedAt(now.minusSeconds(30));
+        run.setRunStartedAt(now.minusSeconds(115));
+        run.setLastSyncedAt(now);
+        workflowRunRepository.save(run);
+
+        // Verify null & populated filters against live PostgreSQL (no lower(bytea) errors)
+        Pageable wfPage = PageRequest.of(0, 10, Sort.by(Sort.Direction.ASC, "name"));
+        assertThat(workflowRepository.searchByRepository(workspaceA.getId(), repoA1.getId(), null, null, wfPage)
+                .getTotalElements()).isEqualTo(1);
+        assertThat(workflowRepository.searchByRepository(workspaceA.getId(), repoA1.getId(), "100%", "ACTIVE", wfPage)
+                .getTotalElements()).isEqualTo(1);
+
+        Pageable runPage = PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "githubCreatedAt"));
+        assertThat(workflowRunRepository.searchByWorkspace(workspaceA.getId(), repoA1.getId(), null, null, null, null, runPage)
+                .getTotalElements()).isEqualTo(1);
+        assertThat(workflowRunRepository.searchByWorkspace(
+                workspaceA.getId(), repoA1.getId(), wf.getId(), WorkflowRunNormalizedStatus.SUCCESS, "MAIN", "100%", runPage)
+                .getTotalElements()).isEqualTo(1);
+
+        // Verify Phase 3.1 REST endpoints directly against live PostgreSQL
+        mockMvc.perform(get("/api/workspaces/{ws}/pipelines", workspaceA.getId())
+                        .with(authenticatedUser(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.workflowCount").value(1))
+                .andExpect(jsonPath("$.recentRunCount").value(1))
+                .andExpect(jsonPath("$.succeededRunCount").value(1));
+
+        // Verify atomic ON CONFLICT DO NOTHING delivery claim on real PostgreSQL without aborting transaction
+        String deliveryId = "pg-atomic-delivery-" + java.util.UUID.randomUUID();
+        int firstClaim = webhookDeliveryRepository.claimDelivery(
+                java.util.UUID.randomUUID(), deliveryId, "ping", null, 9981001L,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "PROCESSED", "Initial claim", now, now, now
+        );
+        int secondClaim = webhookDeliveryRepository.claimDelivery(
+                java.util.UUID.randomUUID(), deliveryId, "ping", null, 9981001L,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "PROCESSED", "Duplicate claim", now, now, now
+        );
+        assertThat(firstClaim).isEqualTo(1);
+        assertThat(secondClaim).isEqualTo(0);
     }
 
     private LinkedRepositoryEntity saveRepo(

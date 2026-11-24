@@ -13,6 +13,20 @@ jobs:
   backend:
     name: Backend Test & Package (Java 17)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: cloudforge
+          POSTGRES_USER: cloudforge
+          POSTGRES_PASSWORD: cloudforge_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U cloudforge -d cloudforge"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
     defaults:
       run:
         working-directory: backend
@@ -27,7 +41,12 @@ jobs:
           java-version: "17"
           cache: maven
 
-      - name: Run Maven unit & integration tests
+      - name: Run Maven unit & integration tests (including PostgreSQL 17 regression suite)
+        env:
+          TEST_POSTGRES_URL: jdbc:postgresql://127.0.0.1:5432/cloudforge
+          TEST_POSTGRES_USER: cloudforge
+          TEST_POSTGRES_PASSWORD: cloudforge_ci_password
+          TEST_POSTGRES_RUN_FLYWAY: "true"
         run: mvn -B test
 
       - name: Build executable JAR

@@ -5,11 +5,15 @@ import type {
   AuthConfig,
   AuthMePayload,
   CreateProjectInput,
+  GitHubActionsSyncResponse,
   GitHubInstallUrlResponse,
   GitHubInstallationsResponse,
   GitHubSyncResponse,
+  GitHubWorkflow,
+  GitHubWorkflowRun,
   LinkedRepository,
   PagedResponse,
+  PipelineOverview,
   ProjectDetail,
   ProjectEnvironment,
   ProjectStatus,
@@ -17,6 +21,8 @@ import type {
   RepositoryConnectionStatus,
   UpdateEnvironmentInput,
   UpdateProjectInput,
+  WorkflowRunJobsResponse,
+  WorkflowRunNormalizedStatus,
   WorkspaceMember,
   WorkspaceRole,
   WorkspaceSummary,
@@ -30,18 +36,21 @@ export class ApiClientError extends Error {
   readonly status: number;
   readonly fieldErrors: Record<string, string>;
   readonly requestId: string | null;
+  readonly retryAfterSeconds: number | null;
 
   constructor(
     status: number,
     message: string,
     fieldErrors: Record<string, string> = {},
-    requestId: string | null = null
+    requestId: string | null = null,
+    retryAfterSeconds: number | null = null
   ) {
     super(message);
     this.name = 'ApiClientError';
     this.status = status;
     this.fieldErrors = fieldErrors;
     this.requestId = requestId;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -133,20 +142,26 @@ async function apiRequest<T>(
   const isJson = contentType.includes('application/json');
 
   if (!response.ok) {
+    const retryAfterHeader = response.headers.get('Retry-After');
+    const parsedRetryAfter = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : Number.NaN;
+    const retryAfterSeconds = Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0 ? parsedRetryAfter : null;
+
     if (isJson) {
       const payload = (await response.json()) as Partial<ApiErrorPayload>;
       throw new ApiClientError(
         response.status,
         payload.message || `Request failed with HTTP ${response.status}`,
         payload.fieldErrors ?? {},
-        payload.requestId ?? requestId
+        payload.requestId ?? requestId,
+        retryAfterSeconds
       );
     }
     throw new ApiClientError(
       response.status,
       `Request failed with HTTP ${response.status}`,
       {},
-      requestId
+      requestId,
+      retryAfterSeconds
     );
   }
 
@@ -431,6 +446,107 @@ export function fetchRepositories(
   const qs = search.toString();
   return apiRequest<PagedResponse<LinkedRepository>>(
     `/api/workspaces/${workspaceId}/repositories${qs ? `?${qs}` : ''}`
+  );
+}
+
+// --- Phase 3.1: GitHub Actions Pipelines API ---
+
+export function fetchPipelineOverview(workspaceId: string): Promise<PipelineOverview> {
+  return apiRequest<PipelineOverview>(`/api/workspaces/${workspaceId}/pipelines`);
+}
+
+export function fetchRepositoryWorkflows(
+  workspaceId: string,
+  repositoryId: string,
+  params: { q?: string; state?: string; page?: number; size?: number } = {}
+): Promise<PagedResponse<GitHubWorkflow>> {
+  const search = new URLSearchParams();
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.state && params.state.trim()) search.set('state', params.state.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<GitHubWorkflow>>(
+    `/api/workspaces/${workspaceId}/repositories/${repositoryId}/workflows${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function fetchRepositoryWorkflowRuns(
+  workspaceId: string,
+  repositoryId: string,
+  params: {
+    workflowId?: string;
+    status?: WorkflowRunNormalizedStatus | '';
+    branch?: string;
+    q?: string;
+    page?: number;
+    size?: number;
+  } = {}
+): Promise<PagedResponse<GitHubWorkflowRun>> {
+  const search = new URLSearchParams();
+  if (params.workflowId) search.set('workflowId', params.workflowId);
+  if (params.status) search.set('status', params.status);
+  if (params.branch && params.branch.trim()) search.set('branch', params.branch.trim());
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<GitHubWorkflowRun>>(
+    `/api/workspaces/${workspaceId}/repositories/${repositoryId}/workflow-runs${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function fetchWorkspaceWorkflowRuns(
+  workspaceId: string,
+  params: {
+    repositoryId?: string;
+    workflowId?: string;
+    status?: WorkflowRunNormalizedStatus | '';
+    branch?: string;
+    q?: string;
+    page?: number;
+    size?: number;
+  } = {}
+): Promise<PagedResponse<GitHubWorkflowRun>> {
+  const search = new URLSearchParams();
+  if (params.repositoryId) search.set('repositoryId', params.repositoryId);
+  if (params.workflowId) search.set('workflowId', params.workflowId);
+  if (params.status) search.set('status', params.status);
+  if (params.branch && params.branch.trim()) search.set('branch', params.branch.trim());
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<GitHubWorkflowRun>>(
+    `/api/workspaces/${workspaceId}/workflow-runs${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function fetchWorkflowRunDetail(
+  workspaceId: string,
+  runId: string
+): Promise<GitHubWorkflowRun> {
+  return apiRequest<GitHubWorkflowRun>(
+    `/api/workspaces/${workspaceId}/workflow-runs/${runId}`
+  );
+}
+
+export function fetchWorkflowRunJobs(
+  workspaceId: string,
+  runId: string
+): Promise<WorkflowRunJobsResponse> {
+  return apiRequest<WorkflowRunJobsResponse>(
+    `/api/workspaces/${workspaceId}/workflow-runs/${runId}/jobs`
+  );
+}
+
+export function syncRepositoryWorkflows(
+  workspaceId: string,
+  repositoryId: string
+): Promise<GitHubActionsSyncResponse> {
+  return apiRequest<GitHubActionsSyncResponse>(
+    `/api/workspaces/${workspaceId}/repositories/${repositoryId}/workflows/sync`,
+    { method: 'POST' }
   );
 }
 

@@ -1,0 +1,49 @@
+# Root Docker ignore for multi-stage root-context builds (e.g., Dockerfile.render).
+# Prevents local secrets, Git history, and host build artifacts from entering the Docker build context.
+
+.git/
+.gitignore
+.github/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# Local IDE and agent directories
+.idea/
+*.iml
+.vscode/
+.antigravity/
+.gemini/
+
+# Logs and temporary artifacts
+logs/
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Frontend host artifacts and local overrides
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/coverage/
+frontend/.vite/
+frontend/.env
+frontend/.env.*
+frontend/review/
+
+# Backend host build outputs and local overrides
+backend/target/
+backend/.mvn/timing.properties
+backend/.env
+backend/.env.*
+
+# Documentation not required inside container builds
+docs/
+README.md

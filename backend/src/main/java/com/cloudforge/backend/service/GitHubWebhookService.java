@@ -6,7 +6,6 @@ import com.cloudforge.backend.entity.GitHubInstallationEntity;
 import com.cloudforge.backend.entity.InstallationStatus;
 import com.cloudforge.backend.entity.LinkedRepositoryEntity;
 import com.cloudforge.backend.entity.RepositoryConnectionStatus;
-import com.cloudforge.backend.entity.WebhookDeliveryEntity;
 import com.cloudforge.backend.entity.WebhookDeliveryStatus;
 import com.cloudforge.backend.exception.ApiException;
 import com.cloudforge.backend.exception.BadRequestException;
@@ -19,7 +18,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +28,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Processes HMAC-SHA256 verified GitHub webhooks relevant to Phase 2 installation
@@ -105,14 +104,6 @@ public class GitHubWebhookService {
         String normalizedEvent = eventType.trim().toLowerCase();
         String normalizedDeliveryId = deliveryId.trim();
 
-        if (deliveryRepository.existsByDeliveryId(normalizedDeliveryId)) {
-            log.info("Ignored duplicate GitHub webhook deliveryId={} event={}", normalizedDeliveryId, normalizedEvent);
-            return new WebhookProcessingResult(
-                    HttpStatus.OK,
-                    new WebhookAckResponse("duplicate", normalizedDeliveryId, normalizedEvent, "Webhook delivery already processed")
-            );
-        }
-
         JsonNode payload = parsePayload(rawPayload);
         String action = payload.path("action").asText(null);
         Long githubInstallationId = payload.has("installation") && payload.path("installation").hasNonNull("id")
@@ -120,17 +111,43 @@ public class GitHubWebhookService {
                 : null;
 
         String payloadHash = signatureVerifier.sha256Hex(rawPayload);
+        boolean supported = SUPPORTED_EVENTS.contains(normalizedEvent);
+        Instant now = Instant.now();
 
-        if (!SUPPORTED_EVENTS.contains(normalizedEvent)) {
-            saveDelivery(normalizedDeliveryId, normalizedEvent, action, githubInstallationId, payloadHash,
-                    WebhookDeliveryStatus.IGNORED, "Event type not handled in Phase 2 (builds/deployments disabled)");
+        // Atomically claim the delivery_id BEFORE executing any side effects so concurrent
+        // duplicate webhook deliveries cannot duplicate state mutations or abort the PostgreSQL transaction.
+        int claimed = deliveryRepository.claimDelivery(
+                UUID.randomUUID(),
+                normalizedDeliveryId,
+                normalizedEvent,
+                action != null && action.length() > 64 ? action.substring(0, 64) : action,
+                githubInstallationId,
+                payloadHash,
+                supported ? WebhookDeliveryStatus.PROCESSED.name() : WebhookDeliveryStatus.IGNORED.name(),
+                supported
+                        ? "Processing webhook delivery"
+                        : "Event type not handled (builds/deployments disabled)",
+                now,
+                now,
+                now
+        );
+
+        if (claimed == 0) {
+            log.info("Ignored duplicate GitHub webhook deliveryId={} event={}", normalizedDeliveryId, normalizedEvent);
+            return new WebhookProcessingResult(
+                    HttpStatus.OK,
+                    new WebhookAckResponse("duplicate", normalizedDeliveryId, normalizedEvent, "Webhook delivery already processed")
+            );
+        }
+
+        if (!supported) {
             return new WebhookProcessingResult(
                     HttpStatus.ACCEPTED,
                     new WebhookAckResponse(
                             "ignored",
                             normalizedDeliveryId,
                             normalizedEvent,
-                            "Event acknowledged and ignored; builds and deployments are not enabled in Phase 2"
+                            "Event acknowledged and ignored; builds and deployments are not enabled"
                     )
             );
         }
@@ -143,15 +160,8 @@ public class GitHubWebhookService {
             default -> "Ignored event";
         };
 
-        try {
-            saveDelivery(normalizedDeliveryId, normalizedEvent, action, githubInstallationId, payloadHash,
-                    WebhookDeliveryStatus.PROCESSED, summary);
-        } catch (DataIntegrityViolationException duplicateRace) {
-            return new WebhookProcessingResult(
-                    HttpStatus.OK,
-                    new WebhookAckResponse("duplicate", normalizedDeliveryId, normalizedEvent, "Webhook delivery already processed")
-            );
-        }
+        String truncatedSummary = summary != null && summary.length() > 500 ? summary.substring(0, 500) : summary;
+        deliveryRepository.updateDeliverySummary(normalizedDeliveryId, truncatedSummary, Instant.now());
 
         log.info("Processed GitHub webhook deliveryId={} event={} action={}", normalizedDeliveryId, normalizedEvent, action);
         return new WebhookProcessingResult(
@@ -368,27 +378,6 @@ public class GitHubWebhookService {
         }
 
         return "Updated " + trackedRepos.size() + " tracked repository record(s) for repository." + normalizedAction;
-    }
-
-    private void saveDelivery(
-            String deliveryId,
-            String eventType,
-            String action,
-            Long githubInstallationId,
-            String payloadSha256,
-            WebhookDeliveryStatus status,
-            String summary
-    ) {
-        WebhookDeliveryEntity entity = new WebhookDeliveryEntity();
-        entity.setDeliveryId(deliveryId);
-        entity.setEventType(eventType);
-        entity.setAction(action);
-        entity.setGithubInstallationId(githubInstallationId);
-        entity.setPayloadSha256(payloadSha256);
-        entity.setStatus(status);
-        entity.setSummary(summary != null && summary.length() > 500 ? summary.substring(0, 500) : summary);
-        entity.setReceivedAt(Instant.now());
-        deliveryRepository.saveAndFlush(entity);
     }
 
     private JsonNode parsePayload(byte[] rawPayload) {

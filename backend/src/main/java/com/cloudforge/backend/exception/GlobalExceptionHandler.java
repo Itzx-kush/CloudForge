@@ -2,11 +2,13 @@ package com.cloudforge.backend.exception;
 
 import com.cloudforge.backend.config.RequestCorrelationFilter;
 import com.cloudforge.backend.dto.ApiErrorResponse;
+import com.cloudforge.backend.github.GitHubRateLimitException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -29,6 +31,27 @@ import java.util.Map;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(GitHubRateLimitException.class)
+    public ResponseEntity<ApiErrorResponse> handleGitHubRateLimitException(
+            GitHubRateLimitException ex,
+            HttpServletRequest request
+    ) {
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(ex.getStatus());
+        if (ex.getRetryAfterSeconds() != null && ex.getRetryAfterSeconds() > 0) {
+            builder.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        ApiErrorResponse body = new ApiErrorResponse(
+                Instant.now(),
+                ex.getStatus().value(),
+                ex.getStatus().getReasonPhrase(),
+                ex.getMessage(),
+                request.getRequestURI(),
+                MDC.get(RequestCorrelationFilter.MDC_REQUEST_ID_KEY),
+                ex.getFieldErrors()
+        );
+        return builder.body(body);
+    }
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiErrorResponse> handleApiException(

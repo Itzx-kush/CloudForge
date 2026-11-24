@@ -147,23 +147,14 @@ public class GitHubIntegrationService {
 
         GitHubInstallationDetails details = gitHubApiClient.getInstallation(githubInstallationId);
 
-        // Ownership validation: prevent cross-workspace hijacking or attaching another personal account's installation.
+        // Ownership validation: prevent cross-workspace hijacking or attaching unauthorized installations.
         GitHubInstallationEntity existing = installationRepository.findByGithubInstallationId(githubInstallationId).orElse(null);
         if (existing != null && !existing.getWorkspace().getId().equals(workspace.getId())) {
             throw new ConflictException(
                     "This GitHub App installation is already connected to another CloudForge workspace"
             );
         }
-        if ("User".equalsIgnoreCase(details.accountType())) {
-            boolean idMatches = details.accountId() > 0 && details.accountId() == user.getGithubUserId();
-            boolean loginMatches = details.accountLogin() != null
-                    && details.accountLogin().equalsIgnoreCase(user.getUsername());
-            if (!idMatches && !loginMatches) {
-                throw new ForbiddenOperationException(
-                        "Personal GitHub App installations can only be linked by the matching GitHub account owner"
-                );
-            }
-        }
+        verifyInstallationAccountAuthorization(details, existing, user);
 
         GitHubInstallationEntity entity = existing != null ? existing : new GitHubInstallationEntity();
         entity.setWorkspace(workspace);
@@ -471,6 +462,52 @@ public class GitHubIntegrationService {
             );
         }
         return pending;
+    }
+
+    private void verifyInstallationAccountAuthorization(
+            GitHubInstallationDetails details,
+            GitHubInstallationEntity existingForWorkspace,
+            UserEntity user
+    ) {
+        String accountType = details.accountType();
+        if ("User".equalsIgnoreCase(accountType)) {
+            boolean matches;
+            if (details.accountId() > 0) {
+                matches = details.accountId() == user.getGithubUserId();
+            } else {
+                matches = details.accountLogin() != null
+                        && details.accountLogin().equalsIgnoreCase(user.getUsername());
+            }
+            if (!matches) {
+                throw new ForbiddenOperationException(
+                        "Personal GitHub App installations can only be linked by the matching GitHub account owner"
+                );
+            }
+            return;
+        }
+
+        if ("Organization".equalsIgnoreCase(accountType)) {
+            if (existingForWorkspace != null) {
+                // Already verified/bound to this workspace; workspace OWNER authorization was already enforced.
+                return;
+            }
+            // Fail closed: without GitHub App user-to-server installation ownership verification
+            // (GET /user/installations using an installation OAuth code), CloudForge cannot verify
+            // that the caller is an authorized administrator of an unattached GitHub Organization.
+            log.warn(
+                    "Rejected unverified new Organization GitHub App installation callback installationId={} accountLogin={} userId={}",
+                    details.installationId(),
+                    details.accountLogin(),
+                    user.getId()
+            );
+            throw new ForbiddenOperationException(
+                    "New GitHub Organization App installations cannot be linked automatically until GitHub App user-to-server installation verification is enabled"
+            );
+        }
+
+        throw new ForbiddenOperationException(
+                "Unsupported GitHub App installation account type: " + (accountType != null ? accountType : "unknown")
+        );
     }
 
     public GitHubInstallationDto toInstallationDto(GitHubInstallationEntity entity) {

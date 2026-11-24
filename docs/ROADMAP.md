@@ -1,6 +1,6 @@
 # CloudForge Development Roadmap
 
-This roadmap clearly distinguishes **Implemented (Phases 1–2)** functionality from **Planned (Phases 3–4)** capabilities.
+This roadmap clearly distinguishes **Implemented (Phases 1–2 & Phase 3.1)** functionality from **Planned (Phases 3.2–4)** capabilities.
 
 ---
 
@@ -34,14 +34,25 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2)** functionality 
 
 ---
 
-## Phase 3 — Isolated Build Workers, Container Deployments & Kubernetes (**Planned**)
+## Phase 3.1 — Read-Only GitHub Actions Integration & Pipelines Dashboard (**Implemented**)
 
-- [ ] **GitHub Actions Synchronization:** Ingest and display real CI workflow statuses and commit checks linked to CloudForge projects.
-- [ ] **Isolated Container Build Workers:** Execute repository container builds strictly inside ephemeral, rootless workers with enforced CPU, memory, disk, timeout, and network egress limits (never on the control-plane host).
-- [ ] **Encrypted Secret Storage:** Introduce KMS / External Secrets integration for project environment secrets (deferred from Phase 2).
-- [ ] **Docker Image Deployment:** Push immutable, content-addressed OCI digests to a configured container registry.
-- [ ] **Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy projects to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.
-- [ ] **Deployment History & Rollback:** Persist every release revision (commit SHA, image digest, manifest checksum, actor, outcome) and provide one-click rollback to previously verified healthy releases.
+- [x] **PostgreSQL Persistence (`V3__github_actions_workflows.sql`):** Non-destructive Flyway migration adding `github_workflows` and `github_workflow_runs` with run-attempt uniqueness (`linked_repository_id`, `github_run_id`, `run_attempt`), status check constraints, and query indexes.
+- [x] **Least-Privilege GitHub Actions Client (`actions: read`):** Scoped GitHub App installation tokens preserving `metadata: read` for Phase 2 repository sync while requesting strictly `metadata: read` + `actions: read` for paginated workflow, run, and job retrieval (`RestClientGitHubApiClient`).
+- [x] **Idempotent Synchronization Service (`GitHubActionsSyncService`):** Short-transaction sync lifecycle (no DB transactions held across GitHub HTTP requests), per-repository concurrency guard, run-attempt tracking, and clean handling of missing `Actions: Read` permissions, rate limits (`Retry-After`), revoked/suspended installations, and missing repositories.
+- [x] **Secure Workspace-Isolated REST APIs (`PipelineController`):** Authenticated, workspace-scoped `/pipelines`, `/workflows`, `/workflow-runs`, `/workflow-runs/{runId}`, `/workflow-runs/{runId}/jobs`, and CSRF-protected `POST .../workflows/sync` (`OWNER`/`DEVELOPER` only).
+- [x] **Security Hardening:** Root `.dockerignore`, atomic `ON CONFLICT DO NOTHING` webhook deduplication prior to side effects, fail-closed unverified new Organization installation callback guard, and pre-lookup membership enforcement on environment updates.
+- [x] **Premium Pipelines Dashboard (`PipelinesPage`):** Live telemetry summary, searchable repository selector, discovered workflows table, filtered/paginated workflow runs table, accessible Run Details modal with live ordered jobs & expandable steps, clear distinction between **Refresh Stored Data** vs **Sync from GitHub**, and full dark/light/system/accent/mobile responsiveness. See `docs/PHASE3_1_GITHUB_ACTIONS.md`.
+
+---
+
+## Phases 3.2–3.7 — Orchestration, Isolated Build Workers, Container Deployments & Kubernetes (**Planned**)
+
+- [ ] **Phase 3.2 — Pipeline Orchestration Engine:** Persistent state machine, durable job queue, and controlled execution stages.
+- [ ] **Phase 3.3 — Isolated Container Build Workers:** Execute repository container builds strictly inside ephemeral, rootless workers with enforced CPU, memory, disk, timeout, and network egress limits (never on the control-plane host).
+- [ ] **Phase 3.4 — Encrypted Secret Storage:** Introduce KMS / External Secrets integration for project environment secrets (deferred from Phase 2).
+- [ ] **Phase 3.5 — Docker Image Deployment & OCI Registry:** Push immutable, content-addressed OCI digests to a configured container registry.
+- [ ] **Phase 3.6 — Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy projects to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.
+- [ ] **Phase 3.7 — Deployment History & Rollback:** Persist every release revision (commit SHA, image digest, manifest checksum, actor, outcome) and provide one-click rollback to previously verified healthy releases.
 
 ---
 
