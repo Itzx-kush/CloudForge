@@ -181,3 +181,7 @@ curl -i http://localhost:8080/api/health   # Expect HTTP 200 UP
 | Environment save returns `400 Bad Request` | Variable key or value matches secret pattern (`*SECRET*`, `*PASSWORD*`, `*TOKEN*`, etc.) | Remove secret values from Non-Secret Config and store them in **Encrypted Secrets** instead (requires `CLOUDFORGE_SECRETS_ENABLED=true` + external `CLOUDFORGE_SECRETS_KEYRING`, see [`docs/PHASE3_4_SECRET_MANAGEMENT.md`](PHASE3_4_SECRET_MANAGEMENT.md)) |
 | Secret create/rotate returns `503 Service Unavailable` | `CLOUDFORGE_SECRETS_ENABLED=false` or invalid/missing `CLOUDFORGE_SECRETS_KEYRING` | Provision valid 256-bit Base64 KEK(s) (`openssl rand -base64 32`) via environment variables and restart |
 | `compose.yaml` port bind failure on `5432` or `8080` | Another local PostgreSQL or Java service uses that port | Stop the conflicting service or override `POSTGRES_PORT` / `BACKEND_PORT` in `.env` |
+
+## Dedicated GitHub source worker
+
+The Phase 3.5 draft adds a source-only worker for development over HTTPS. See the [source acquisition runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md) for GitHub App permissions, operator allowlists, and verification steps.

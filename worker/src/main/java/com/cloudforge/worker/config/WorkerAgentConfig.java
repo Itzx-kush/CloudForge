@@ -1,5 +1,6 @@
 package com.cloudforge.worker.config;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -27,6 +28,7 @@ public record WorkerAgentConfig(
         boolean secretDeliveryEnabled,
         boolean allowInsecureLocalDelivery
 ) {
+    public static final String SOURCE_OPERATION = "GITHUB_SOURCE_ACQUIRE";
     public static final String DEFAULT_EXECUTOR_IMAGE = "alpine:3.20";
     public static final String AGENT_VERSION = "0.3.4-phase3.4";
 
@@ -134,6 +136,18 @@ public record WorkerAgentConfig(
             );
         }
         supportedOperations = List.copyOf(supportedOperations);
+        if (supportedOperations.contains(SOURCE_OPERATION)) {
+            URI endpoint = URI.create(controlPlaneBaseUrl);
+            if (!supportedOperations.equals(List.of(SOURCE_OPERATION)) || maxConcurrency != 1 || !"https".equals(endpoint.getScheme())
+                    || endpoint.getHost() == null || endpoint.getUserInfo() != null
+                    || endpoint.getQuery() != null || endpoint.getFragment() != null) {
+                throw new IllegalArgumentException("Source workers require a dedicated HTTPS control plane connection");
+            }
+        }
+    }
+
+    public boolean sourceOnly() {
+        return supportedOperations.equals(List.of(SOURCE_OPERATION));
     }
 
     private static boolean isHttpsOrAllowedLoopback(String baseUrl, boolean allowInsecureLocal) {
@@ -170,6 +184,7 @@ public record WorkerAgentConfig(
                 env.getOrDefault("CLOUDFORGE_WORKER_ALLOW_INSECURE_LOCAL_DELIVERY", "false")
         );
 
+        boolean sourceOnly = Boolean.parseBoolean(env.getOrDefault("CLOUDFORGE_WORKER_SOURCE_ONLY", "false"));
         return new WorkerAgentConfig(
                 baseUrl,
                 workerId,
@@ -185,7 +200,8 @@ public record WorkerAgentConfig(
                 pollMs,
                 hbMs,
                 concurrency,
-                List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST", "WORKER_DIAGNOSTICS"),
+                sourceOnly ? List.of(SOURCE_OPERATION)
+                        : List.of("ENV_VALIDATION", "CONTROLLED_SMOKE_TEST", "WORKER_DIAGNOSTICS"),
                 secretDeliveryEnabled,
                 allowInsecureLocalDelivery
         );

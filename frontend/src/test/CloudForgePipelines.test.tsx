@@ -828,6 +828,40 @@ describe('CloudForge Phase 3.2 Pipeline Orchestration UI', () => {
     expect(capturedHeaders[0]['Idempotency-Key']).toMatch(/^cf-run-/);
   }, 15000);
 
+  it('validates an optional full SHA before queueing GitHub source from a tag', async () => {
+    const user = userEvent.setup();
+    const sourceDefinition = structuredClone(SAMPLE_DEFINITIONS[0]);
+    sourceDefinition.stages[0].metadata.operation = 'GITHUB_SOURCE_ACQUIRE';
+    const createRun = vi.fn(() => jsonResponse(SAMPLE_RUN_QUEUED, 201));
+    mockOrchestrationApi({ definitions: [sourceDefinition], onCreateRun: createRun });
+
+    render(
+      <MemoryRouter initialEntries={['/pipelines']}>
+        <AppRoutes />
+      </MemoryRouter>
+    );
+
+    await openCloudForgePipelinesTab(user);
+    const definitions = screen.getByRole('table', { name: 'CloudForge pipeline definitions' });
+    await user.click(within(definitions).getByRole('button', { name: /Queue Run/i }));
+    const dialog = within(await screen.findByRole('dialog'));
+    const commit = dialog.getByLabelText(/Commit SHA/i);
+    await user.type(dialog.getByLabelText(/Target Branch or GitHub Tag/i), 'refs/tags/v1.0');
+    await user.type(commit, '1234567');
+    await user.click(dialog.getByRole('button', { name: /Confirm Queue Run/i }));
+
+    expect(dialog.getByRole('alert')).toHaveTextContent('full 40-character commit SHA');
+    expect(createRun).not.toHaveBeenCalled();
+
+    await user.clear(commit);
+    await user.click(dialog.getByRole('button', { name: /Confirm Queue Run/i }));
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+    expect(createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ targetBranch: 'refs/tags/v1.0' }),
+      expect.any(Object)
+    );
+  }, 15000);
+
   it('inspects run stage states and transition event history, and cancels a queued run after confirmation', async () => {
     const user = userEvent.setup();
     mockOrchestrationApi();

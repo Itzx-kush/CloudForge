@@ -44,6 +44,7 @@ import com.cloudforge.backend.secrets.service.SecretAuditService;
 import com.cloudforge.backend.service.AuditService;
 import com.cloudforge.backend.service.WorkspaceAuthorizationService;
 import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
+import com.cloudforge.backend.source.ProjectSourceService;
 import com.cloudforge.backend.worker.entity.AttemptStatus;
 import com.cloudforge.backend.worker.entity.StageExecutionAttemptEntity;
 import com.cloudforge.backend.worker.repository.StageExecutionAttemptRepository;
@@ -97,6 +98,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
     private final PipelineRunSecretReferenceRepository secretReferenceRepository;
     private final SecretAuditService secretAuditService;
     private final AuditService auditService;
+    private final ProjectSourceService sourceService;
     private final ObjectMapper objectMapper;
 
     public PipelineOrchestrationService(
@@ -116,6 +118,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
             PipelineRunSecretReferenceRepository secretReferenceRepository,
             SecretAuditService secretAuditService,
             AuditService auditService,
+            ProjectSourceService sourceService,
             ObjectMapper objectMapper
     ) {
         this.authorizationService = authorizationService;
@@ -134,6 +137,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
         this.secretReferenceRepository = secretReferenceRepository;
         this.secretAuditService = secretAuditService;
         this.auditService = auditService;
+        this.sourceService = sourceService;
         this.objectMapper = objectMapper;
     }
 
@@ -214,6 +218,20 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
         int nextRunNumber = runRepository.findMaxRunNumberByDefinitionId(definition.getId()) + 1;
 
         String effectiveBranch = targetBranch != null ? targetBranch : project.getDefaultBranch();
+        if (validatedGraph.orderedStages().stream().anyMatch(spec ->
+                AllowedWorkerOperation.resolveForStage(spec.stageType(), spec.metadata())
+                        .orElse(null) == AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE)) {
+            var repository = definition.getLinkedRepository();
+            if (repository == null || project.getLinkedRepository() == null
+                    || !repository.getId().equals(project.getLinkedRepository().getId())) {
+                throw new BadRequestException("Source acquisition requires the project's current linked repository");
+            }
+            String resolvedCommit = sourceService.resolveCommit(workspaceId, repository, effectiveBranch);
+            if (commitSha != null && !resolvedCommit.equals(commitSha)) {
+                throw new ConflictException("The selected GitHub ref no longer matches the requested full commit SHA");
+            }
+            commitSha = resolvedCommit;
+        }
         Map<String, List<StageSecretBindingDto>> pinnedDtoMap = toPinnedBindingDtoMap(pinnedByStageKey);
         String snapshotJson = buildImmutableSnapshotJson(
                 definition, project.getName(), validatedGraph, effectiveBranch, commitSha, targetEnvironment, pinnedDtoMap

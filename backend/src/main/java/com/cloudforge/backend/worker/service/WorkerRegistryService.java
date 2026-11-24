@@ -19,6 +19,7 @@ import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
 import com.cloudforge.backend.worker.entity.AttemptStatus;
 import com.cloudforge.backend.worker.entity.StageExecutionAttemptEntity;
 import com.cloudforge.backend.worker.entity.WorkerNodeEntity;
+import com.cloudforge.backend.worker.entity.WorkerAdapterType;
 import com.cloudforge.backend.worker.entity.WorkerStatus;
 import com.cloudforge.backend.worker.repository.StageExecutionAttemptRepository;
 import com.cloudforge.backend.worker.repository.WorkerNodeRepository;
@@ -79,6 +80,12 @@ public class WorkerRegistryService {
         }
 
         List<String> normalizedOps = validateSupportedOperations(request.supportedOperations());
+        String sourceOperation = AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE.name();
+        if (request.adapterType() == WorkerAdapterType.GITHUB_SOURCE
+                ? !normalizedOps.equals(List.of(sourceOperation)) || request.maxConcurrency() != 1
+                : normalizedOps.contains(sourceOperation)) {
+            throw new BadRequestException("GitHub source acquisition requires a dedicated source worker");
+        }
         Instant now = Instant.now();
 
         WorkerNodeEntity node = workerNodeRepository.findByWorkerIdForUpdate(principal.workerId())

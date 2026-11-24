@@ -102,6 +102,9 @@ public class StageExecutionAttemptEntity extends BaseAuditableEntity {
     @Column(name = "last_secret_delivery_at")
     private Instant lastSecretDeliveryAt;
 
+    @Column(name = "source_archive_issued_at")
+    private Instant sourceArchiveIssuedAt;
+
     @Version
     @Column(name = "row_version", nullable = false)
     private Long rowVersion = 0L;
@@ -284,6 +287,14 @@ public class StageExecutionAttemptEntity extends BaseAuditableEntity {
 
     public Long getRowVersion() {
         return rowVersion;
+    }
+
+    public Instant getSourceArchiveIssuedAt() {
+        return sourceArchiveIssuedAt;
+    }
+
+    public void setSourceArchiveIssuedAt(Instant sourceArchiveIssuedAt) {
+        this.sourceArchiveIssuedAt = sourceArchiveIssuedAt;
     }
 
     public int getSecretDeliveryCount() {

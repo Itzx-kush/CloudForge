@@ -528,11 +528,12 @@ export interface PipelineRunEvent {
 export type AllowedWorkerOperation =
   | 'ENV_VALIDATION'
   | 'CONTROLLED_SMOKE_TEST'
-  | 'WORKER_DIAGNOSTICS';
+  | 'WORKER_DIAGNOSTICS'
+  | 'GITHUB_SOURCE_ACQUIRE';
 
 export type WorkerStatus = 'AVAILABLE' | 'BUSY' | 'DRAINING' | 'OFFLINE';
 
-export type WorkerAdapterType = 'DOCKER_ISOLATED' | 'MOCK_TEST';
+export type WorkerAdapterType = 'DOCKER_ISOLATED' | 'GITHUB_SOURCE' | 'MOCK_TEST';
 
 export type AttemptStatus =
   | 'CLAIMED'

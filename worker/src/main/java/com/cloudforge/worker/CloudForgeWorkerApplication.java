@@ -24,7 +24,7 @@ public final class CloudForgeWorkerApplication {
         WorkerAgentConfig config = WorkerAgentConfig.fromEnv(System.getenv());
         DockerIsolatedExecutionAdapter adapter = new DockerIsolatedExecutionAdapter(config);
 
-        if (!adapter.isAvailable()) {
+        if (!config.sourceOnly() && !adapter.isAvailable()) {
             log.error("Local Docker daemon is not reachable. Start Docker Engine before launching CloudForge worker.");
             System.exit(2);
             return;

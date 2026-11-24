@@ -20,6 +20,7 @@ import com.cloudforge.backend.worker.config.WorkerProperties;
 import com.cloudforge.backend.worker.dto.AttemptRunningAckRequest;
 import com.cloudforge.backend.worker.dto.CompleteAttemptRequest;
 import com.cloudforge.backend.worker.dto.StageExecutionAttemptDto;
+import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
 import com.cloudforge.backend.worker.entity.AttemptFailureCategory;
 import com.cloudforge.backend.worker.entity.AttemptStatus;
 import com.cloudforge.backend.worker.entity.StageExecutionAttemptEntity;
@@ -175,6 +176,12 @@ public class WorkerResultProcessorService {
         }
         if (reportedStatus == AttemptStatus.CANCELLED && !request.terminationConfirmed()) {
             throw new BadRequestException("Cannot report CANCELLED until isolated execution termination is confirmed");
+        }
+
+        if (reportedStatus == AttemptStatus.SUCCEEDED
+                && AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE.name().equals(attempt.getAllowedOperation())
+                && attempt.getSourceArchiveIssuedAt() == null) {
+            throw new ConflictException("Source acquisition cannot succeed before an archive grant is issued");
         }
 
         List<String> attemptSecrets = attemptSecretRedactionService.resolveSecretsForAttemptRedaction(attempt);

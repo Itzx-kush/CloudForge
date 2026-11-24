@@ -1,5 +1,6 @@
 package com.cloudforge.worker.client;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,10 @@ public interface ControlPlaneClient {
             long fencingGeneration
     ) {
         throw new UnsupportedOperationException("Worker secret delivery is not supported by this client");
+    }
+
+    default URI fetchSourceArchive(String workerId, UUID attemptId, String leaseToken, long fencingGeneration) {
+        throw new UnsupportedOperationException("GitHub source acquisition is unavailable");
     }
 
     void appendLogs(String workerId, UUID attemptId, String leaseToken, long fencingGeneration, List<LogEntry> entries);

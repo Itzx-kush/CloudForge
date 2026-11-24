@@ -4,9 +4,12 @@ import com.cloudforge.worker.client.ControlPlaneClient;
 import com.cloudforge.worker.config.WorkerAgentConfig;
 import com.cloudforge.worker.executor.IsolatedExecutionAdapter;
 import com.cloudforge.worker.security.WorkerSecretRedactor;
+import com.cloudforge.worker.source.GitHubSourceArchive;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -14,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -48,17 +52,18 @@ public class WorkerAgentLoop implements AutoCloseable {
     }
 
     public void registerWorker() {
+        String adapterType = config.sourceOnly() ? "GITHUB_SOURCE" : adapter.adapterType();
         client.register(new ControlPlaneClient.RegistrationPayload(
                 config.workerId(),
                 config.displayName(),
-                adapter.adapterType(),
+                adapterType,
                 config.supportedOperations(),
                 config.maxConcurrency(),
                 config.hostLabel(),
                 config.agentVersion()
         ));
         log.info("Registered trusted worker workerId={} adapter={} ops={}",
-                config.workerId(), adapter.adapterType(), config.supportedOperations());
+                config.workerId(), adapterType, config.supportedOperations());
     }
 
     public void start() {
@@ -160,6 +165,14 @@ public class WorkerAgentLoop implements AutoCloseable {
                     startedAt
             );
 
+            boolean sourceOperation = WorkerAgentConfig.SOURCE_OPERATION.equals(lease.allowedOperation());
+            if (sourceOperation != config.sourceOnly()
+                    || (sourceOperation && (lease.hasSecretBindings()
+                    || (lease.secretAliases() != null && !lease.secretAliases().isEmpty())))) {
+                completeDeliveryFailure(lease, startedAt, "UNSUPPORTED_OPERATION", "Worker capability mismatch", redactor);
+                return;
+            }
+
             if (lease.hasSecretBindings() || (lease.secretAliases() != null && !lease.secretAliases().isEmpty())) {
                 if (!config.secretDeliveryEnabled()) {
                     String msg = "Worker secret delivery is disabled (CLOUDFORGE_WORKER_SECRET_DELIVERY_ENABLED=false)";
@@ -211,7 +224,9 @@ public class WorkerAgentLoop implements AutoCloseable {
                     Map.copyOf(ephemeralSecrets)
             );
 
-            IsolatedExecutionAdapter.ExecutionResult result = adapter.execute(
+            IsolatedExecutionAdapter.ExecutionResult result = sourceOperation
+                    ? inspectSource(lease, startedAt, cancelSignal, logBuffer)
+                    : adapter.execute(
                     execRequest,
                     cancelSignal,
                     (stream, message, occurredAt) -> {
@@ -279,6 +294,41 @@ public class WorkerAgentLoop implements AutoCloseable {
             redactor.clear();
             activeExecutions.remove(lease.attemptId());
         }
+    }
+
+    private IsolatedExecutionAdapter.ExecutionResult inspectSource(
+            ControlPlaneClient.ClaimedStageLease lease, Instant startedAt, AtomicBoolean cancelSignal,
+            List<ControlPlaneClient.LogEntry> logs
+    ) {
+        Instant deadline = startedAt.plusSeconds(Math.min(lease.stage().timeoutSeconds(), config.maxExecutionTimeoutSeconds()));
+        logs.add(new ControlPlaneClient.LogEntry("SYSTEM", "Requesting archive for the pinned source commit", Instant.now()));
+        String status = "SUCCEEDED";
+        String category = "NONE";
+        String summary;
+        Map<String, Object> usage = Map.of();
+        try {
+            var url = client.fetchSourceArchive(config.workerId(), lease.attemptId(),
+                    lease.leaseToken(), lease.fencingGeneration());
+            var inspection = GitHubSourceArchive.acquire(url, lease.stage().repositoryFullName(),
+                    lease.stage().commitSha(), deadline, cancelSignal);
+            usage = Map.of("sourceFileCount", inspection.fileCount(), "sourceBytes", inspection.extractedBytes());
+            summary = "Pinned source archive verified and temporary source removed";
+        } catch (CancellationException ex) {
+            status = "CANCELLED";
+            category = "CANCELLED";
+            summary = "GitHub source acquisition cancelled";
+        } catch (GitHubSourceArchive.SourceTimeoutException ex) {
+            status = "TIMED_OUT";
+            category = "EXECUTION_TIMEOUT";
+            summary = "GitHub source acquisition exceeded the stage deadline";
+        } catch (IOException | RuntimeException ex) {
+            status = "FAILED";
+            category = "OPERATION_FAILURE";
+            summary = "GitHub source acquisition failed. Check installation access and archive limits.";
+        }
+        logs.add(new ControlPlaneClient.LogEntry("SYSTEM", summary, Instant.now()));
+        return new IsolatedExecutionAdapter.ExecutionResult(status, category, null, summary, usage,
+                startedAt, Instant.now(), true);
     }
 
     private void completeDeliveryFailure(

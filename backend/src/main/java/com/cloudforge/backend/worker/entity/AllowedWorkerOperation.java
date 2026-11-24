@@ -17,6 +17,12 @@ import java.util.Set;
  */
 public enum AllowedWorkerOperation {
 
+    GITHUB_SOURCE_ACQUIRE(
+            "GitHub Source Acquisition",
+            EnumSet.of(PipelineStageType.SOURCE_PREP),
+            true,
+            "Downloads and verifies a bounded GitHub archive for the pinned commit"
+    ),
     ENV_VALIDATION(
             "Environment Validation",
             EnumSet.of(PipelineStageType.SOURCE_PREP),
@@ -115,7 +121,7 @@ public enum AllowedWorkerOperation {
         }
         return switch (stageType) {
             case SOURCE_PREP, TEST ->
-                    "Declarative stage only — select an allowlisted Phase 3.3 operation (ENV_VALIDATION, CONTROLLED_SMOKE_TEST, or WORKER_DIAGNOSTICS) to enable isolated worker execution.";
+                    "Declarative stage only — select an allowlisted Phase 3.3 operation (ENV_VALIDATION, CONTROLLED_SMOKE_TEST, WORKER_DIAGNOSTICS, or GITHUB_SOURCE_ACQUIRE) to enable isolated worker execution.";
             case BUILD ->
                     "Unsupported in Phase 3.3 — arbitrary repository container builds require hardened sandbox isolation and remain planned.";
             case SECURITY_SCAN ->

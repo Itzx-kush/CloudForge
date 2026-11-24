@@ -109,7 +109,11 @@ Located under `backend/src/main/resources/db/migration/`:
 
 ---
 
-## 3. Planned Target Architecture (Phases 3.5–4)
+## 3. Phase 3.5 source acquisition draft
+
+The control plane pins the selected GitHub ref and grants the dedicated worker access to an archive for that commit after verifying the worker's HTTPS request and active lease. The worker validates source files in temporary storage. See the [source acquisition runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md).
+
+## 4. Planned Target Architecture (Phases 3.5–4)
 
 > **Status:** Deferred beyond Phase 3.4. Documented to guide incremental delivery.
 
