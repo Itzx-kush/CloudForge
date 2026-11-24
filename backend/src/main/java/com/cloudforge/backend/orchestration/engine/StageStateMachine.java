@@ -28,6 +28,7 @@ public final class StageStateMachine {
                 PipelineStageStatus.CANCELLED
         ));
         map.put(PipelineStageStatus.RUNNING, EnumSet.of(
+                PipelineStageStatus.READY,
                 PipelineStageStatus.SUCCEEDED,
                 PipelineStageStatus.FAILED,
                 PipelineStageStatus.CANCELLED

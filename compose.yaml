@@ -59,6 +59,10 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       GITHUB_API_BASE_URL: ${GITHUB_API_BASE_URL:-https://api.github.com}
       GITHUB_APP_CALLBACK_URL: ${GITHUB_APP_CALLBACK_URL:-http://localhost:5173/api/github/app/callback}
+      # Phase 3.3 worker control plane — disabled by default; backend container NEVER mounts docker.sock.
+      CLOUDFORGE_WORKERS_ENABLED: ${CLOUDFORGE_WORKERS_ENABLED:-false}
+      CLOUDFORGE_WORKERS_SCHEDULER_ENABLED: ${CLOUDFORGE_WORKERS_SCHEDULER_ENABLED:-false}
+      CLOUDFORGE_WORKER_CREDENTIALS: ${CLOUDFORGE_WORKER_CREDENTIALS:-}
       LOG_LEVEL_ROOT: ${LOG_LEVEL_ROOT:-INFO}
       LOG_LEVEL_APP: ${LOG_LEVEL_APP:-INFO}
     ports:

@@ -1,14 +1,19 @@
 package com.cloudforge.backend.security;
 
 import com.cloudforge.backend.config.AppProperties;
+import com.cloudforge.backend.worker.security.WorkerAuthenticationFilter;
+import com.cloudforge.backend.worker.security.WorkerCredentialService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
@@ -31,6 +36,8 @@ public class SecurityConfig {
     private final ApiAuthenticationEntryPoint authenticationEntryPoint;
     private final ApiAccessDeniedHandler accessDeniedHandler;
     private final RedirectOriginValidator redirectOriginValidator;
+    private final WorkerCredentialService workerCredentialService;
+    private final ObjectMapper objectMapper;
 
     public SecurityConfig(
             AppProperties appProperties,
@@ -39,7 +46,9 @@ public class SecurityConfig {
             OAuth2LoginFailureHandler oAuth2LoginFailureHandler,
             ApiAuthenticationEntryPoint authenticationEntryPoint,
             ApiAccessDeniedHandler accessDeniedHandler,
-            RedirectOriginValidator redirectOriginValidator
+            RedirectOriginValidator redirectOriginValidator,
+            WorkerCredentialService workerCredentialService,
+            ObjectMapper objectMapper
     ) {
         this.appProperties = appProperties;
         this.oAuth2UserService = oAuth2UserService;
@@ -48,9 +57,47 @@ public class SecurityConfig {
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.accessDeniedHandler = accessDeniedHandler;
         this.redirectOriginValidator = redirectOriginValidator;
+        this.workerCredentialService = workerCredentialService;
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * Dedicated stateless security boundary for internal trusted worker APIs ({@code /api/internal/workers/**}).
+     * Completely isolated from browser OAuth/session authentication and CORS so ordinary workspace users
+     * cannot impersonate workers or invoke execution completion endpoints.
+     */
+    @Bean
+    @Order(1)
+    public SecurityFilterChain workerInternalSecurityFilterChain(HttpSecurity http) throws Exception {
+        http
+                .securityMatcher("/api/internal/workers/**")
+                .cors(cors -> cors.disable())
+                .csrf(csrf -> csrf.disable())
+                .headers(headers -> headers
+                        .frameOptions(frame -> frame.deny())
+                        .contentTypeOptions(contentType -> { })
+                )
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+                .requestCache(cache -> cache.requestCache(new NullRequestCache()))
+                .authorizeHttpRequests(auth -> auth
+                        .anyRequest().hasRole("TRUSTED_WORKER")
+                )
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler)
+                )
+                .addFilterBefore(
+                        new WorkerAuthenticationFilter(workerCredentialService, objectMapper),
+                        UsernamePasswordAuthenticationFilter.class
+                );
+
+        return http.build();
     }
 
     @Bean
+    @Order(2)
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrfTokenRepository.setCookiePath("/");

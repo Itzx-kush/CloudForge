@@ -1,6 +1,6 @@
 # CloudForge Development Roadmap
 
-This roadmap clearly distinguishes **Implemented (Phases 1–2, Phase 3.1 & Phase 3.2)** functionality from **Planned (Phases 3.3–4)** capabilities.
+This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.3)** functionality from **Planned (Phases 3.4–4)** capabilities.
 
 ---
 
@@ -56,10 +56,20 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2, Phase 3.1 & Phas
 
 ---
 
-## Phases 3.3–3.7 — Isolated Build Workers, Secrets, Container Deployments & Kubernetes (**Planned**)
+## Phase 3.3 — Isolated Build Workers, Secure Execution & Pipeline Scheduling (**Implemented — Local/Dev Allowlisted Operations**)
 
-- [ ] **Phase 3.3 — Isolated Container Build Workers:** Execute repository container builds strictly inside ephemeral, rootless workers with enforced CPU, memory, disk, timeout, and network egress limits (never on the control-plane host), claiming `READY` stage tickets via `WorkerAssignmentContract`.
-- [ ] **Phase 3.4 — Encrypted Secret Storage:** Introduce KMS / External Secrets integration for project environment secrets (deferred from Phase 2).
+- [x] **Two-Domain Separation (Control Plane vs. Execution Plane):** Standalone Java 17 worker module (`worker/`, `cloudforge-worker.jar`) communicating exclusively with authenticated control-plane endpoints (`/api/internal/workers/**`) — zero Docker execution or Docker socket mounts inside the Spring Boot web server or Render web service.
+- [x] **PostgreSQL Persistence (`V5__isolated_worker_execution.sql`):** Non-destructive Flyway migration extending `pipeline_runs` / `pipeline_stage_runs` and creating `worker_nodes`, `worker_credentials` (SHA-256 hashed tokens only), `stage_execution_attempts` (leases, fencing generations, outcomes), and `stage_execution_logs` (bounded, ordered, sanitized logs).
+- [x] **Trusted Worker Authentication & Fail-Closed Defaults:** Dedicated stateless Spring Security filter chain (`@Order(1)`) validating per-worker `X-CloudForge-Worker-Id` + `Authorization: Bearer` tokens with constant-time SHA-256 comparison, expiration/revocation support, spoofing prevention (`403`), ordinary-user exclusion, and `cloudforge.workers.enabled=false` default (locked `false` in `application-render.yml`).
+- [x] **Bounded FIFO Scheduler, Atomic Leasing & Fencing:** `WorkerSchedulerService`, `WorkerResultProcessorService`, and `WorkerRecoveryService` enforcing deterministic `Worker -> Run -> Stage -> Attempt` pessimistic locks, unique `leaseToken` + monotonic `fencingGeneration`, retry backoff via `RUNNING -> READY` (preserving terminal `FAILED` immutability), active cancellation signaling requiring confirmed termination, and stale lease recovery.
+- [x] **Hardened Local Docker Execution Adapter (`DockerIsolatedExecutionAdapter`):** Runs strictly allowlisted operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`) inside ephemeral containers (`--rm`, `--user 65534:65534`, `--cap-drop=ALL`, `no-new-privileges:true`, `--read-only`, bounded `noexec` `/tmp`, `--network=none`, CPU/memory/PID limits, pinned/allowlisted images only, confirmed cleanup). Unsupported stages (`BUILD`, `SECURITY_SCAN`, `CONTAINER_PACKAGE`, `DEPLOYMENT`) report explicit capability boundaries rather than faking success.
+- [x] **Frontend Worker Telemetry & Log Viewer (`CloudForgePipelinesPanel`):** Live worker pool availability card, allowlisted operation selector in definition editor, honest `QUEUED — Awaiting available worker` / `Cancelling — Awaiting worker termination` badges, per-stage execution attempt history, and bounded monospace sanitized execution logs. See `docs/PHASE3_3_ISOLATED_WORKERS.md`.
+
+---
+
+## Phases 3.4–3.7 — Encrypted Secrets, Container Registry, Kubernetes & Rollback (**Planned**)
+
+- [ ] **Phase 3.4 — Encrypted Secret Storage:** Introduce KMS / External Secrets integration for project environment secrets (deferred from Phase 2) and hardened multi-tenant sandbox isolation (e.g., gVisor / Kata / Firecracker) before permitting untrusted repository builds.
 - [ ] **Phase 3.5 — Docker Image Deployment & OCI Registry:** Push immutable, content-addressed OCI digests to a configured container registry.
 - [ ] **Phase 3.6 — Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy projects to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.
 - [ ] **Phase 3.7 — Deployment History & Rollback:** Persist every release revision (commit SHA, image digest, manifest checksum, actor, outcome) and provide one-click rollback to previously verified healthy releases.

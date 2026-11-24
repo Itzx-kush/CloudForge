@@ -1,6 +1,6 @@
 # CloudForge Architecture
 
-This document describes the **implemented Phase 1, Phase 2, Phase 3.1 & Phase 3.2 architecture** alongside the **planned target architecture** for Phases 3.3–4. Every section explicitly distinguishes what is live today from what is planned.
+This document describes the **implemented Phase 1, Phase 2 & Phases 3.1–3.3 architecture** alongside the **planned target architecture** for Phases 3.4–4. Every section explicitly distinguishes what is live today from what is planned.
 
 ---
 
@@ -14,7 +14,7 @@ This document describes the **implemented Phase 1, Phase 2, Phase 3.1 & Phase 3.
 
 ---
 
-## 2. Phases 1–3.2 Implemented Architecture
+## 2. Phases 1–3.3 Implemented Architecture
 
 ### 2.1 High-Level Component Diagram
 
@@ -60,13 +60,21 @@ flowchart LR
 - **`orchestration.entity` & `orchestration.repository`:** Six PostgreSQL-backed entities (`PipelineDefinitionEntity`, `PipelineStageDefinitionEntity`, `PipelineRunEntity`, `PipelineStageRunEntity`, `PipelineRunEventEntity`, `PipelineIdempotencyKeyEntity`) with encapsulated status transitions (no public `setStatus`), optimistic `@Version` row locking, pessimistic `FOR UPDATE` locking, and typed Criteria search queries.
 - **`orchestration.service` & `orchestration.controller`:** `PipelineDefinitionService`, `PipelineIdempotencyService`, `PipelineOrchestrationService`, and `PipelineOrchestrationController` exposing 9 workspace-isolated RBAC REST endpoints under `/api/workspaces/{workspaceId}/pipelines`. Queued runs persist immutable definition snapshots, promote root stages to `READY`, record immutable `pipeline_run_events` and workspace `audit_events`, and remain `QUEUED` (`Queued — Awaiting execution infrastructure`) until Phase 3.3 isolated workers exist. See `docs/PHASE3_2_PIPELINE_ORCHESTRATION.md`.
 
-### 2.5 Backend Package Structure (`com.cloudforge.backend`)
+### 2.5 Isolated Worker Execution Plane (Phase 3.3 — `com.cloudforge.backend.worker` & `worker/`)
+
+CloudForge enforces strict separation between the **Control Plane** (`backend/`) and the **Execution Plane** (`worker/`):
+
+- **Control Plane (`com.cloudforge.backend.worker`):** Manages trusted worker registration (`WorkerRegistryService`), constant-time SHA-256 worker credential authentication (`WorkerCredentialService` + stateless `@Order(1)` `WorkerAuthenticationFilter` on `/api/internal/workers/**`), bounded FIFO `READY`-stage scheduling & atomic fenced leasing (`WorkerSchedulerService`), outcome validation & DAG progression (`WorkerResultProcessorService`), expired lease fencing & crash recovery (`WorkerRecoveryService`), and defense-in-depth sanitized bounded log storage (`WorkerExecutionLogService` + `LogSanitizer`). Never executes Docker commands or mounts `/var/run/docker.sock`; disabled by default (`cloudforge.workers.enabled=false`) and locked off in `application-render.yml`.
+- **Execution Plane (`worker/` — standalone `cloudforge-worker.jar`):** Runs as a separate host-side development process (`CloudForgeWorkerApplication` -> `WorkerAgentLoop` -> `HttpControlPlaneClient` -> `DockerIsolatedExecutionAdapter`). Executes ONLY compile-time allowlisted operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`) inside ephemeral, hardened Docker containers (`--rm`, `--user 65534:65534`, `--cap-drop=ALL`, `no-new-privileges:true`, `--read-only`, bounded `noexec` `/tmp`, `--network=none`, CPU/memory/PID limits, pinned/allowlisted images only). See `docs/PHASE3_3_ISOLATED_WORKERS.md`.
+
+### 2.6 Backend Package Structure (`com.cloudforge.backend`)
 
 | Package | Responsibility |
 | --- | --- |
 | `controller` | REST APIs (`HealthController`, `AuthController`, `WorkspaceController`, `ProjectController`, `GitHubIntegrationController`, `PipelineController`, `GitHubWebhookController`, `AuditEventController`, `SpaPageController`). |
 | `service` | Domain logic (`HealthService`, `UserAccountService`, `WorkspaceAuthorizationService`, `WorkspaceService`, `ProjectService`, `ProjectEnvironmentService`, `GitHubIntegrationService`, `GitHubActionsSyncService`, `PipelineService`, `GitHubWebhookService`, `AuditService`, `AuditQueryService`). |
-| `orchestration` | Phase 3.2 modular pipeline orchestration subsystem (`controller`, `service`, `engine`, `entity`, `repository`, `dto`) managing persistent pipeline definitions, DAG validation, state machines, idempotency, concurrency control, cancellation, and Phase 3.3 worker contracts. |
+| `orchestration` | Phase 3.2 modular pipeline orchestration subsystem (`controller`, `service`, `engine`, `entity`, `repository`, `dto`) managing persistent pipeline definitions, DAG validation, state machines, idempotency, concurrency control, cancellation, and `WorkerAssignmentContract`. |
+| `worker` | Phase 3.3 control-plane worker subsystem (`config`, `security`, `entity`, `repository`, `dto`, `service`, `controller`) handling trusted worker auth, registry, heartbeats, bounded scheduling, atomic fenced leasing, result processing, crash/lease recovery, and sanitized log persistence. |
 | `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubTokenScope`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`, typed metadata DTOs & integration exceptions). |
 | `security` | Spring Security filter chain, OAuth 2.0 user service, success/failure handlers, `CloudForgeUserPrincipal`, `RedirectOriginValidator`, SPA CSRF handler/filter, JSON 401/403 handlers. |
 | `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 11 core domain JPA entities + enums (including `GitHubWorkflowEntity`, `GitHubWorkflowRunEntity`, `WorkflowRunNormalizedStatus`). |
@@ -82,6 +90,7 @@ Located under `backend/src/main/resources/db/migration/`:
 - **`V2__webhook_deliveries.sql`:** `webhook_deliveries` for idempotent webhook processing and SHA-256 payload fingerprinting without storing sensitive payload bodies.
 - **`V3__github_actions_workflows.sql`:** `github_workflows` and `github_workflow_runs` storing non-sensitive GitHub Actions workflow definitions and execution attempts keyed by `(linked_repository_id, github_run_id, run_attempt)`.
 - **`V4__pipeline_orchestration_engine.sql`:** `pipeline_definitions`, `pipeline_stage_definitions`, `pipeline_runs`, `pipeline_stage_runs`, `pipeline_run_events`, and `pipeline_idempotency_keys` storing workspace-scoped pipeline definitions, immutable run snapshots, DAG stage instances, chronological transition events, and restart-safe idempotency claims.
+- **`V5__isolated_worker_execution.sql`:** Extends `pipeline_runs` / `pipeline_stage_runs` with cancellation-intent, allowlisted operation, retry backoff, and fencing columns, and adds `worker_nodes`, `worker_credentials` (SHA-256 hashes only), `stage_execution_attempts`, and `stage_execution_logs`.
 
 ### 2.7 Frontend Architecture (`frontend/`)
 
@@ -93,9 +102,9 @@ Located under `backend/src/main/resources/db/migration/`:
 
 ---
 
-## 3. Planned Target Architecture (Phases 3.3–4)
+## 3. Planned Target Architecture (Phases 3.4–4)
 
-> **Status:** Deferred beyond Phase 3.2. Documented to guide incremental delivery.
+> **Status:** Deferred beyond Phase 3.3. Documented to guide incremental delivery.
 
 ```mermaid
 flowchart TB

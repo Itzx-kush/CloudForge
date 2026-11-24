@@ -10,6 +10,9 @@ import type {
   PipelineRun,
   PipelineRunEvent,
   ProjectSummary,
+  StageExecutionAttempt,
+  StageExecutionLog,
+  WorkerPoolStatus,
   WorkspaceRole,
 } from '../types/platform';
 
@@ -285,6 +288,9 @@ function mockOrchestrationApi(options?: {
   definitions?: PipelineDefinition[];
   runs?: PipelineRun[];
   eventsByRunId?: Record<string, PipelineRunEvent[]>;
+  workerPool?: WorkerPoolStatus;
+  attemptsByStageId?: Record<string, StageExecutionAttempt[]>;
+  logsByStageId?: Record<string, StageExecutionLog[]>;
   definitionsError?: Response;
   onCreateDefinition?: (body: unknown, headers: Record<string, string>) => Response;
   onCreateRun?: (body: unknown, headers: Record<string, string>) => Response;
@@ -451,6 +457,44 @@ function mockOrchestrationApi(options?: {
       };
       definitions.unshift(created);
       return jsonResponse(created, 201);
+    }
+
+    // Phase 3.3 Worker Pool Status, Attempts & Execution Logs
+    if (url.includes('/pipelines/workers/status') && method === 'GET') {
+      if (options?.workerPool) {
+        return jsonResponse(options.workerPool);
+      }
+      return jsonResponse({
+        workerPlaneEnabled: false,
+        schedulerEnabled: false,
+        registeredWorkers: 0,
+        availableWorkers: 0,
+        busyWorkers: 0,
+        drainingWorkers: 0,
+        offlineWorkers: 0,
+        activeAssignments: 0,
+        workspaceReadyStages: 1,
+        workspaceRunningStages: 0,
+        workspaceFailedAttempts: 0,
+        supportedOperations: ['ENV_VALIDATION', 'CONTROLLED_SMOKE_TEST', 'WORKER_DIAGNOSTICS'],
+        workers: [],
+        sampledAt: '2026-11-24T10:00:00Z',
+      });
+    }
+    if (url.includes('/stages/') && url.endsWith('/attempts') && method === 'GET') {
+      const stageId = url.split('/stages/')[1].replace('/attempts', '');
+      return jsonResponse(options?.attemptsByStageId?.[stageId] ?? []);
+    }
+    if (url.includes('/stages/') && url.includes('/logs') && method === 'GET') {
+      const stageId = url.split('/stages/')[1].split('/logs')[0];
+      const items = options?.logsByStageId?.[stageId] ?? [];
+      return jsonResponse({
+        items,
+        page: 0,
+        size: 150,
+        totalElements: items.length,
+        totalPages: items.length > 0 ? 1 : 0,
+      });
     }
 
     // Phase 3.2 Orchestration Run Events
@@ -881,4 +925,157 @@ describe('CloudForge Phase 3.2 Pipeline Orchestration UI', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
   });
+
+  it('displays live Phase 3.3 isolated worker pool telemetry, unsupported capability notes, attempts, and safe sanitized logs', async () => {
+    const user = userEvent.setup();
+
+    const executedRun: PipelineRun = {
+      ...structuredClone(SAMPLE_RUN_QUEUED),
+      id: 'run-exec-33',
+      runNumber: 5,
+      status: 'SUCCEEDED',
+      statusReason: 'All required pipeline stages completed successfully',
+      startedAt: '2026-11-24T10:10:00Z',
+      completedAt: '2026-11-24T10:10:12Z',
+      stages: [
+        {
+          ...structuredClone(SAMPLE_RUN_QUEUED.stages[0]),
+          id: 'st-exec-1',
+          stageKey: 'source',
+          status: 'SUCCEEDED',
+          attemptNumber: 1,
+          allowedOperation: 'ENV_VALIDATION',
+          executionSupported: true,
+          capabilityMessage: null,
+          assignedWorkerId: 'local-docker-worker-1',
+          startedAt: '2026-11-24T10:10:01Z',
+          completedAt: '2026-11-24T10:10:05Z',
+        },
+        {
+          ...structuredClone(SAMPLE_RUN_QUEUED.stages[1]),
+          id: 'st-exec-2',
+          stageKey: 'build',
+          status: 'READY',
+          attemptNumber: 0,
+          allowedOperation: null,
+          executionSupported: false,
+          capabilityMessage:
+            'Unsupported in Phase 3.3 — arbitrary repository container builds require hardened sandbox isolation.',
+          assignedWorkerId: null,
+        },
+      ],
+    };
+
+    mockOrchestrationApi({
+      runs: [executedRun],
+      workerPool: {
+        workerPlaneEnabled: true,
+        schedulerEnabled: true,
+        registeredWorkers: 2,
+        availableWorkers: 1,
+        busyWorkers: 1,
+        drainingWorkers: 0,
+        offlineWorkers: 0,
+        activeAssignments: 1,
+        workspaceReadyStages: 1,
+        workspaceRunningStages: 0,
+        workspaceFailedAttempts: 0,
+        supportedOperations: ['ENV_VALIDATION', 'CONTROLLED_SMOKE_TEST', 'WORKER_DIAGNOSTICS'],
+        workers: [
+          {
+            workerId: 'local-docker-worker-1',
+            displayName: 'Local Docker Worker',
+            adapterType: 'DOCKER_ISOLATED',
+            status: 'AVAILABLE',
+            supportedOperations: ['ENV_VALIDATION', 'CONTROLLED_SMOKE_TEST'],
+            maxConcurrency: 1,
+            activeAssignments: 0,
+            hostLabel: 'dev-host',
+            agentVersion: '0.3.3-phase3.3',
+            registeredAt: '2026-11-24T10:00:00Z',
+            lastHeartbeatAt: '2026-11-24T10:10:10Z',
+            offlineAt: null,
+          },
+        ],
+        sampledAt: '2026-11-24T10:10:12Z',
+      },
+      attemptsByStageId: {
+        'st-exec-1': [
+          {
+            id: 'att-1',
+            stageRunId: 'st-exec-1',
+            workerId: 'local-docker-worker-1',
+            attemptNumber: 1,
+            fencingGeneration: 1,
+            allowedOperation: 'ENV_VALIDATION',
+            status: 'SUCCEEDED',
+            failureCategory: 'NONE',
+            exitCode: 0,
+            summary: 'Allowlisted operation ENV_VALIDATION succeeded in isolated container',
+            resourceUsage: { cpuLimit: '0.5', memoryLimit: '128m' },
+            leaseStartedAt: '2026-11-24T10:10:00Z',
+            leaseExpiresAt: '2026-11-24T10:11:00Z',
+            lastHeartbeatAt: '2026-11-24T10:10:05Z',
+            startedAt: '2026-11-24T10:10:01Z',
+            completedAt: '2026-11-24T10:10:05Z',
+            cancellationRequestedAt: null,
+            terminationConfirmed: true,
+            recoveredAt: null,
+          },
+        ],
+      },
+      logsByStageId: {
+        'st-exec-1': [
+          {
+            id: 'log-1',
+            attemptId: 'att-1',
+            attemptNumber: 1,
+            workerId: 'local-docker-worker-1',
+            sequenceNumber: 1,
+            streamType: 'STDOUT',
+            message: '[ENV_VALIDATION] uid=65534 Read-only root filesystem verified <script>alert(1)</script>',
+            truncated: false,
+            occurredAt: '2026-11-24T10:10:02Z',
+          },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/pipelines']}>
+        <AppRoutes />
+      </MemoryRouter>
+    );
+
+    await openCloudForgePipelinesTab(user);
+
+    // Worker pool summary card displays real persisted counts and registered worker node
+    expect(screen.getByText('Isolated Worker Execution Plane')).toBeInTheDocument();
+    expect(screen.getByTestId('worker-registered-count')).toHaveTextContent('2');
+    expect(screen.getByTestId('worker-available-busy')).toHaveTextContent('1 / 1');
+    expect(screen.getByText('local-docker-worker-1')).toBeInTheDocument();
+
+    // Open run details modal and inspect stage capability boundary + attempts & sanitized logs
+    const runsTable = screen.getByRole('table', { name: 'CloudForge pipeline runs' });
+    await user.click(within(runsTable).getByRole('button', { name: /Inspect/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(/Unsupported in Phase 3\.3 — arbitrary repository container builds/i)
+    ).toBeInTheDocument();
+
+    const logButtons = within(dialog).getAllByRole('button', { name: /View Attempts & Logs/i });
+    await user.click(logButtons[0]);
+
+    const drawer = await within(dialog).findByTestId('stage-exec-drawer-source');
+    await waitFor(() => {
+      expect(within(drawer).getByText(/Execution Attempts \(1\)/i)).toBeInTheDocument();
+      expect(within(drawer).getByText(/Sanitized Execution Logs \(1\)/i)).toBeInTheDocument();
+    });
+    // Safe text rendering: HTML script tags are rendered literally, never executed as DOM <script>
+    expect(
+      within(drawer).getByText(/uid=65534 Read-only root filesystem verified <script>alert\(1\)<\/script>/i)
+    ).toBeInTheDocument();
+    expect(drawer.querySelector('script')).toBeNull();
+  }, 15000);
 });

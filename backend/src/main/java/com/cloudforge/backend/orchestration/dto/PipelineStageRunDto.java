@@ -20,6 +20,13 @@ public record PipelineStageRunDto(
         boolean allowFailure,
         PipelineStageStatus status,
         String statusReason,
+        String allowedOperation,
+        boolean executionSupported,
+        String capabilityMessage,
+        String assignedWorkerId,
+        Instant leaseExpiresAt,
+        Instant nextRetryAt,
+        Instant cancellationRequestedAt,
         Instant readyAt,
         Instant startedAt,
         Instant completedAt

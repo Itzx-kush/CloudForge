@@ -104,6 +104,18 @@ cloudforge:
     actions-sync-max-runs-per-repo: ${GITHUB_ACTIONS_SYNC_MAX_RUNS_PER_REPO:50}
     actions-sync-per-page: ${GITHUB_ACTIONS_SYNC_PER_PAGE:50}
     actions-sync-max-job-pages: ${GITHUB_ACTIONS_SYNC_MAX_JOB_PAGES:3}
+  workers:
+    enabled: ${CLOUDFORGE_WORKERS_ENABLED:false}
+    scheduler-enabled: ${CLOUDFORGE_WORKERS_SCHEDULER_ENABLED:false}
+    credentials: ${CLOUDFORGE_WORKER_CREDENTIALS:}
+    lease-duration-seconds: ${CLOUDFORGE_WORKER_LEASE_DURATION_SECONDS:60}
+    heartbeat-interval-seconds: ${CLOUDFORGE_WORKER_HEARTBEAT_INTERVAL_SECONDS:10}
+    heartbeat-timeout-seconds: ${CLOUDFORGE_WORKER_HEARTBEAT_TIMEOUT_SECONDS:45}
+    recovery-interval-ms: ${CLOUDFORGE_WORKER_RECOVERY_INTERVAL_MS:15000}
+    max-claim-batch-size: ${CLOUDFORGE_WORKER_MAX_CLAIM_BATCH_SIZE:10}
+    retry-base-backoff-seconds: ${CLOUDFORGE_WORKER_RETRY_BASE_BACKOFF_SECONDS:5}
+    max-log-lines-per-attempt: ${CLOUDFORGE_WORKER_MAX_LOG_LINES:250}
+    max-log-bytes-per-attempt: ${CLOUDFORGE_WORKER_MAX_LOG_BYTES:65536}
 
 logging:
   level:

@@ -233,6 +233,185 @@
   color: var(--text-secondary);
 }
 
+/* --- Phase 3.3: Worker Pool, Execution Attempts & Bounded Log Console --- */
+
+.cf-worker-pool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.cf-worker-metric {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cf-worker-metric__label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cf-worker-metric__value {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.cf-worker-node-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cf-worker-node-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-code);
+  font-size: 12.5px;
+}
+
+.cf-worker-node-row__id {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.cf-worker-node-row__meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cf-stage-capability-note {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-default);
+  background: var(--bg-surface-elevated);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cf-stage-execution-drawer {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cf-attempt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cf-attempt-row {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.cf-attempt-row__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cf-log-console {
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.cf-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cf-log-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cf-log-line__seq {
+  color: var(--text-muted);
+  min-width: 28px;
+  text-align: right;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.cf-log-line__stream {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.cf-log-line__stream--STDERR {
+  color: var(--status-error);
+  border-color: var(--status-error);
+}
+
+.cf-log-line__stream--SYSTEM {
+  color: var(--status-info);
+  border-color: var(--status-info);
+}
+
+.cf-log-line__msg {
+  color: var(--text-primary);
+  min-width: 0;
+  flex: 1;
+}
+
 @media (max-width: 700px) {
   .cf-stage-editor-grid,
   .cf-stage-editor-grid--3 {
@@ -243,5 +422,20 @@
     flex: 1 1 auto;
     justify-content: center;
     min-height: 42px;
+  }
+
+  .cf-worker-pool-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cf-log-line {
+    flex-wrap: wrap;
+    gap: 4px 6px;
+  }
+}
+
+@media (max-width: 430px) {
+  .cf-worker-pool-grid {
+    grid-template-columns: 1fr;
   }
 }

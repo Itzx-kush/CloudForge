@@ -29,6 +29,7 @@ public record PipelineRunDto(
         Instant startedAt,
         Instant completedAt,
         Instant cancelledAt,
+        Instant cancellationRequestedAt,
         Long rowVersion,
         List<PipelineStageRunDto> stages,
         Instant createdAt,
