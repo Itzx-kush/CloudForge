@@ -68,4 +68,31 @@ public class WorkspaceAuthorizationService {
                 "Role " + membership.getRole() + " is not authorized to modify " + environmentType + " environments"
         );
     }
+
+    @Transactional(readOnly = true)
+    public WorkspaceMemberEntity requireSecretWriteAccess(UUID workspaceId, UUID userId) {
+        return requireOwner(workspaceId, userId);
+    }
+
+    @Transactional(readOnly = true)
+    public WorkspaceMemberEntity requireSecretMetadataAccess(UUID workspaceId, UUID userId) {
+        return requireOwner(workspaceId, userId);
+    }
+
+    @Transactional(readOnly = true)
+    public WorkspaceMemberEntity requireSecretBindingManagementAccess(UUID workspaceId, UUID userId) {
+        return requireOwner(workspaceId, userId);
+    }
+
+    @Transactional(readOnly = true)
+    public WorkspaceMemberEntity requirePipelineRunTriggerAccess(
+            UUID workspaceId,
+            UUID userId,
+            boolean hasSecretBindings
+    ) {
+        if (hasSecretBindings) {
+            return requireOwner(workspaceId, userId);
+        }
+        return requireDeveloperOrAbove(workspaceId, userId);
+    }
 }

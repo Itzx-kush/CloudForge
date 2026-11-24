@@ -3,6 +3,7 @@ package com.cloudforge.backend.orchestration.entity;
 import com.cloudforge.backend.entity.BaseAuditableEntity;
 import com.cloudforge.backend.entity.LinkedRepositoryEntity;
 import com.cloudforge.backend.entity.ProjectEntity;
+import com.cloudforge.backend.entity.ProjectEnvironmentEntity;
 import com.cloudforge.backend.entity.UserEntity;
 import com.cloudforge.backend.entity.WorkspaceEntity;
 import jakarta.persistence.Column;
@@ -28,6 +29,10 @@ public class PipelineDefinitionEntity extends BaseAuditableEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "linked_repository_id")
     private LinkedRepositoryEntity linkedRepository;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_environment_id")
+    private ProjectEnvironmentEntity targetEnvironment;
 
     @Column(name = "name", nullable = false, length = 120)
     private String name;
@@ -78,6 +83,14 @@ public class PipelineDefinitionEntity extends BaseAuditableEntity {
 
     public void setLinkedRepository(LinkedRepositoryEntity linkedRepository) {
         this.linkedRepository = linkedRepository;
+    }
+
+    public ProjectEnvironmentEntity getTargetEnvironment() {
+        return targetEnvironment;
+    }
+
+    public void setTargetEnvironment(ProjectEnvironmentEntity targetEnvironment) {
+        this.targetEnvironment = targetEnvironment;
     }
 
     public String getName() {

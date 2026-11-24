@@ -3,6 +3,7 @@ package com.cloudforge.backend.orchestration.entity;
 import com.cloudforge.backend.entity.BaseAuditableEntity;
 import com.cloudforge.backend.entity.LinkedRepositoryEntity;
 import com.cloudforge.backend.entity.ProjectEntity;
+import com.cloudforge.backend.entity.ProjectEnvironmentEntity;
 import com.cloudforge.backend.entity.UserEntity;
 import com.cloudforge.backend.entity.WorkspaceEntity;
 import com.cloudforge.backend.orchestration.engine.PipelineStateMachine;
@@ -42,6 +43,13 @@ public class PipelineRunEntity extends BaseAuditableEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "linked_repository_id")
     private LinkedRepositoryEntity linkedRepository;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_environment_id")
+    private ProjectEnvironmentEntity targetEnvironment;
+
+    @Column(name = "has_secret_bindings", nullable = false)
+    private boolean hasSecretBindings = false;
 
     @Column(name = "run_number", nullable = false)
     private int runNumber;
@@ -285,6 +293,22 @@ public class PipelineRunEntity extends BaseAuditableEntity {
 
     public Long getRowVersion() {
         return rowVersion;
+    }
+
+    public ProjectEnvironmentEntity getTargetEnvironment() {
+        return targetEnvironment;
+    }
+
+    public void setTargetEnvironment(ProjectEnvironmentEntity targetEnvironment) {
+        this.targetEnvironment = targetEnvironment;
+    }
+
+    public boolean isHasSecretBindings() {
+        return hasSecretBindings;
+    }
+
+    public void setHasSecretBindings(boolean hasSecretBindings) {
+        this.hasSecretBindings = hasSecretBindings;
     }
 
     private static String truncate(String value, int max) {

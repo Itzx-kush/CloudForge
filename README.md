@@ -113,6 +113,9 @@ CloudForge/
 | **Projects & Environments** | `GET/POST /api/workspaces/{id}/projects`, `GET/PUT/DELETE .../projects/{projectId}`, `GET/POST/PUT/DELETE .../projects/{projectId}/environments[/{envId}]` | `VIEWER` read, `DEVELOPER` create/update + Dev env, `OWNER` full control & delete |
 | **GitHub App & Repos** | `GET .../github/installations`, `POST .../github/install-url`, `GET /api/github/app/callback`, `POST .../installations/{instId}/sync`, `DELETE .../installations/{instId}`, `GET .../repositories[/{repoId}]` | `OWNER` for connections/sync; all members read repos |
 | **Audit Logs** | `GET /api/workspaces/{id}/audit-events` | `OWNER` only |
+| **Environment Secrets (Phase 3.4)** | `GET .../secrets/status`, `GET/POST/DELETE .../environments/{envId}/secrets`, `POST .../rotate`, `POST .../revoke` | `OWNER` only (write-only metadata; fail closed if unconfigured) |
+| **Pipeline Orchestration (Phases 3.2–3.4)** | `GET/POST/PUT .../pipelines/definitions`, `GET/POST .../pipelines/runs`, `POST .../cancel`, worker pool/attempt/log APIs | `OWNER`/`DEVELOPER` non-secret runs; `OWNER` secret bindings & secret runs |
+| **Internal Worker & Operator APIs** | `/api/internal/workers/**`, `/api/internal/operator/secrets/**` | Dedicated Bearer token filters; disabled by default |
 | **GitHub Webhooks** | `POST /api/webhooks/github` | `X-Hub-Signature-256` HMAC-SHA256 verification |
 
 ---
@@ -137,9 +140,9 @@ npm run build
 
 - **Server-Side Sessions & CSRF:** HTTP-only `CLOUDFORGE_SESSION` cookie + `X-XSRF-TOKEN` CSRF enforcement on authenticated state-changing requests. Zero GitHub access tokens are exposed to browser JavaScript or logs.
 - **Backend RBAC & Workspace Isolation:** Every workspace resource enforces role checks and workspace ownership on the backend; cross-workspace reads, mutations, and repository bindings are blocked.
-- **Plaintext Secrets Rejected:** Project environment configurations support non-secret values only; secret-like keys and token/PEM patterns are rejected with `400 Bad Request`. Encrypted secret storage is deferred to Phase 3.
-- **No Code Execution or Deployments in Phase 2:** Repository builds, container execution, and Kubernetes rollouts remain disabled until Phase 3 isolated workers are introduced.
-- **External Credentials:** Live GitHub OAuth sign-in, GitHub App installations, and public webhook deliveries require configuring your own GitHub OAuth App and GitHub App credentials in `.env` (documented in [`docs/GITHUB_INTEGRATION.md`](docs/GITHUB_INTEGRATION.md)).
+- **Plaintext Config Variables Rejected When Secret-Like:** Project environment configurations support non-secret values only; sensitive credentials belong in the **Phase 3.4 AES-256-GCM Encrypted Environment Secrets** vault (`OWNER`-only write-only metadata APIs, queue-time pinned references, lease-bound worker delivery, disabled until configured).
+- **No Untrusted Arbitrary Builds or Kubernetes Deployments:** Worker execution remains scoped strictly to allowlisted operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`); OCI registry pushes and Kubernetes rollouts remain planned for Phases 3.5–3.7.
+- **External Credentials:** Live GitHub OAuth sign-in, GitHub App installations, public webhook deliveries, and Phase 3.4 master keyrings require configuring your own credentials in `.env` (see [`docs/GITHUB_INTEGRATION.md`](docs/GITHUB_INTEGRATION.md) and [`docs/PHASE3_4_SECRET_MANAGEMENT.md`](docs/PHASE3_4_SECRET_MANAGEMENT.md)).
 
 ---
 

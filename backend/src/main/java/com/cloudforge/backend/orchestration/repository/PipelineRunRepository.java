@@ -34,6 +34,7 @@ public interface PipelineRunRepository
             if (query != null && query.getResultType() != Long.class && query.getResultType() != long.class) {
                 root.fetch("project", JoinType.INNER);
                 root.fetch("linkedRepository", JoinType.LEFT);
+                root.fetch("targetEnvironment", JoinType.LEFT);
                 root.fetch("requestedBy", JoinType.LEFT);
                 root.fetch("cancelledBy", JoinType.LEFT);
             }
@@ -74,6 +75,7 @@ public interface PipelineRunRepository
             JOIN FETCH r.project p
             LEFT JOIN FETCH r.pipelineDefinition d
             LEFT JOIN FETCH r.linkedRepository lr
+            LEFT JOIN FETCH r.targetEnvironment te
             LEFT JOIN FETCH r.requestedBy req
             LEFT JOIN FETCH r.cancelledBy can
             WHERE r.id = :id AND r.workspace.id = :workspaceId

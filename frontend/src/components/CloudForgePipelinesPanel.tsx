@@ -10,10 +10,13 @@ import {
   GitBranch,
   History,
   Info,
+  KeyRound,
   Layers,
+  Lock,
   Play,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Terminal,
   Trash2,
   Workflow,
@@ -33,9 +36,11 @@ import {
   cancelPipelineRun,
   createPipelineDefinition,
   createPipelineRun,
+  fetchEnvironmentSecrets,
   fetchPipelineDefinitions,
   fetchPipelineRunEvents,
   fetchPipelineRuns,
+  fetchProjectDetail,
   fetchProjects,
   fetchRepositories,
   fetchStageExecutionAttempts,
@@ -46,6 +51,7 @@ import {
 import type {
   AllowedWorkerOperation,
   AttemptStatus,
+  EnvironmentSecretSummary,
   LinkedRepository,
   PipelineDefinition,
   PipelineRun,
@@ -54,10 +60,12 @@ import type {
   PipelineStageRun,
   PipelineStageStatus,
   PipelineStageType,
+  ProjectEnvironment,
   ProjectSummary,
   StageDefinitionInput,
   StageExecutionAttempt,
   StageExecutionLog,
+  StageSecretBindingInput,
   WorkerPoolStatus,
   WorkerStatus,
 } from '../types/platform';
@@ -141,6 +149,7 @@ interface EditableStageRow {
   timeoutSeconds: number;
   maxRetries: number;
   allowFailure: boolean;
+  secretBindings: StageSecretBindingInput[];
 }
 
 function defaultStarterStages(): EditableStageRow[] {
@@ -155,6 +164,7 @@ function defaultStarterStages(): EditableStageRow[] {
       timeoutSeconds: 300,
       maxRetries: 0,
       allowFailure: false,
+      secretBindings: [],
     },
     {
       localId: 'stage-2',
@@ -166,6 +176,7 @@ function defaultStarterStages(): EditableStageRow[] {
       timeoutSeconds: 600,
       maxRetries: 1,
       allowFailure: false,
+      secretBindings: [],
     },
     {
       localId: 'stage-3',
@@ -177,6 +188,7 @@ function defaultStarterStages(): EditableStageRow[] {
       timeoutSeconds: 600,
       maxRetries: 0,
       allowFailure: false,
+      secretBindings: [],
     },
   ];
 }
@@ -244,6 +256,9 @@ export function CloudForgePipelinesPanel() {
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formRepoId, setFormRepoId] = useState('');
+  const [formTargetEnvId, setFormTargetEnvId] = useState('');
+  const [projectEnvironments, setProjectEnvironments] = useState<ProjectEnvironment[]>([]);
+  const [availableSecrets, setAvailableSecrets] = useState<EnvironmentSecretSummary[]>([]);
   const [formEnabled, setFormEnabled] = useState(true);
   const [formStages, setFormStages] = useState<EditableStageRow[]>(defaultStarterStages);
   const [isSavingDef, setIsSavingDef] = useState(false);
@@ -334,6 +349,53 @@ export function CloudForgePipelinesPanel() {
     void loadOrchestrationData(false);
   }, [loadOrchestrationData]);
 
+  useEffect(() => {
+    if (!isDefModalOpen || !isOwner || !activeWorkspace || !formProjectId) {
+      setProjectEnvironments([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchProjectDetail(activeWorkspace.id, formProjectId)
+      .then((detail) => {
+        if (!cancelled) {
+          setProjectEnvironments(Array.isArray(detail.environments) ? detail.environments : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectEnvironments([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDefModalOpen, isOwner, activeWorkspace, formProjectId]);
+
+  useEffect(() => {
+    if (!isDefModalOpen || !isOwner || !activeWorkspace || !formProjectId || !formTargetEnvId) {
+      setAvailableSecrets([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchEnvironmentSecrets(activeWorkspace.id, formProjectId, formTargetEnvId, {
+      status: 'ACTIVE',
+      size: 100,
+    })
+      .then((res) => {
+        if (!cancelled) {
+          setAvailableSecrets(Array.isArray(res.items) ? res.items : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAvailableSecrets([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDefModalOpen, isOwner, activeWorkspace, formProjectId, formTargetEnvId]);
+
   const openCreateDefinitionModal = () => {
     setEditingDefinition(null);
     const defaultProj = projects[0];
@@ -341,6 +403,8 @@ export function CloudForgePipelinesPanel() {
     setFormName('');
     setFormDescription('');
     setFormRepoId(defaultProj?.linkedRepository?.id ?? '');
+    setFormTargetEnvId('');
+    setAvailableSecrets([]);
     setFormEnabled(true);
     setFormStages(defaultStarterStages());
     setDefFormError(null);
@@ -354,6 +418,7 @@ export function CloudForgePipelinesPanel() {
     setFormName(def.name);
     setFormDescription(def.description ?? '');
     setFormRepoId(def.linkedRepositoryId ?? '');
+    setFormTargetEnvId(def.targetEnvironmentId ?? '');
     setFormEnabled(def.enabled);
     setFormStages(
       def.stages.map((s, idx) => ({
@@ -366,6 +431,10 @@ export function CloudForgePipelinesPanel() {
         timeoutSeconds: s.timeoutSeconds,
         maxRetries: s.maxRetries,
         allowFailure: s.allowFailure,
+        secretBindings: (s.secretBindings ?? []).map((b) => ({
+          secretId: b.secretId,
+          deliveryAlias: b.deliveryAlias,
+        })),
       }))
     );
     setDefFormError(null);
@@ -388,6 +457,7 @@ export function CloudForgePipelinesPanel() {
         timeoutSeconds: 600,
         maxRetries: 0,
         allowFailure: false,
+        secretBindings: [],
       },
     ]);
   };
@@ -432,16 +502,24 @@ export function CloudForgePipelinesPanel() {
     setDefFormError(null);
     setDefFieldErrors({});
 
-    const stagePayload: StageDefinitionInput[] = formStages.map((s) => ({
-      stageKey: s.stageKey.trim().toLowerCase(),
-      displayName: s.displayName.trim(),
-      stageType: s.stageType,
-      dependsOn: s.dependsOn,
-      timeoutSeconds: Number(s.timeoutSeconds) || 600,
-      maxRetries: Number(s.maxRetries) || 0,
-      allowFailure: s.allowFailure,
-      metadata: s.allowedOperation ? { operation: s.allowedOperation } : undefined,
-    }));
+    const stagePayload: StageDefinitionInput[] = formStages.map((s) => {
+      const stageEligibleForSecrets =
+        (ALLOWLISTED_OPS_BY_STAGE_TYPE[s.stageType]?.length ?? 0) > 0 && Boolean(s.allowedOperation);
+      const cleanedBindings = stageEligibleForSecrets
+        ? s.secretBindings.filter((b) => b.secretId && b.deliveryAlias.trim().length > 0)
+        : [];
+      return {
+        stageKey: s.stageKey.trim().toLowerCase(),
+        displayName: s.displayName.trim(),
+        stageType: s.stageType,
+        dependsOn: s.dependsOn,
+        timeoutSeconds: Number(s.timeoutSeconds) || 600,
+        maxRetries: Number(s.maxRetries) || 0,
+        allowFailure: s.allowFailure,
+        metadata: s.allowedOperation ? { operation: s.allowedOperation } : undefined,
+        secretBindings: cleanedBindings.length > 0 ? cleanedBindings : undefined,
+      };
+    });
 
     try {
       if (editingDefinition) {
@@ -452,6 +530,7 @@ export function CloudForgePipelinesPanel() {
             name: formName.trim(),
             description: formDescription.trim() || undefined,
             linkedRepositoryId: formRepoId || null,
+            targetEnvironmentId: formTargetEnvId || null,
             enabled: formEnabled,
             expectedRowVersion: editingDefinition.rowVersion,
             stages: stagePayload,
@@ -472,6 +551,7 @@ export function CloudForgePipelinesPanel() {
           name: formName.trim(),
           description: formDescription.trim() || undefined,
           linkedRepositoryId: formRepoId || null,
+          targetEnvironmentId: formTargetEnvId || null,
           enabled: formEnabled,
           stages: stagePayload,
         });
@@ -668,6 +748,14 @@ export function CloudForgePipelinesPanel() {
         <div>
           <strong>{row.name}</strong>{' '}
           <span className="cf-attempt-pill">v{row.definitionVersion}</span>
+          {row.hasSecretBindings && (
+            <span className="cf-secret-ref-pill" style={{ marginLeft: '6px' }}>
+              <KeyRound size={11} aria-hidden="true" />
+              <span>
+                {row.targetEnvironmentName ? `${row.targetEnvironmentName} Secrets` : 'Secrets Bound'}
+              </span>
+            </span>
+          )}
           {row.description && (
             <span className="cf-pipelines-subtext">{row.description}</span>
           )}
@@ -722,36 +810,41 @@ export function CloudForgePipelinesPanel() {
       key: 'actions',
       header: 'Actions',
       align: 'right',
-      render: (row) => (
-        <div className="cf-inline-actions cf-inline-actions--end">
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            disabled={!canOperateRuns || !row.enabled}
-            title={
-              !canOperateRuns
-                ? 'Only workspace OWNERs and DEVELOPERs can queue pipeline runs'
-                : !row.enabled
-                  ? 'Enable this pipeline definition before queueing runs'
-                  : `Queue a new run for ${row.name}`
-            }
-            onClick={() => openQueueRunModal(row)}
-          >
-            <Play size={12} aria-hidden="true" />
-            <span>Queue Run</span>
-          </button>
-          {isOwner && (
+      render: (row) => {
+        const blockedBySecretRbac = Boolean(row.hasSecretBindings && !isOwner);
+        return (
+          <div className="cf-inline-actions cf-inline-actions--end">
             <button
               type="button"
-              className="btn btn-sm"
-              onClick={() => openEditDefinitionModal(row)}
+              className="btn btn-sm btn-primary"
+              disabled={!canOperateRuns || !row.enabled || blockedBySecretRbac}
+              title={
+                blockedBySecretRbac
+                  ? 'Only workspace OWNERs can queue runs for pipelines with bound encrypted secrets'
+                  : !canOperateRuns
+                    ? 'Only workspace OWNERs and DEVELOPERs can queue pipeline runs'
+                    : !row.enabled
+                      ? 'Enable this pipeline definition before queueing runs'
+                      : `Queue a new run for ${row.name}`
+              }
+              onClick={() => openQueueRunModal(row)}
             >
-              <Edit3 size={12} aria-hidden="true" />
-              <span>Edit</span>
+              {blockedBySecretRbac ? <Lock size={12} aria-hidden="true" /> : <Play size={12} aria-hidden="true" />}
+              <span>Queue Run</span>
             </button>
-          )}
-        </div>
-      ),
+            {isOwner && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => openEditDefinitionModal(row)}
+              >
+                <Edit3 size={12} aria-hidden="true" />
+                <span>Edit</span>
+              </button>
+            )}
+          </div>
+        );
+      },
     },
   ];
 
@@ -1312,6 +1405,28 @@ export function CloudForgePipelinesPanel() {
             </select>
           </div>
 
+          <div className="cf-field">
+            <label htmlFor="cf-orch-target-env" className="cf-field__label">
+              Target Secret Environment (Optional, Owner Only)
+            </label>
+            <select
+              id="cf-orch-target-env"
+              className="cf-select"
+              value={formTargetEnvId}
+              onChange={(e) => {
+                setFormTargetEnvId(e.target.value);
+                setFormStages((prev) => prev.map((row) => ({ ...row, secretBindings: [] })));
+              }}
+            >
+              <option value="">None (no encrypted environment secret bindings)</option>
+              {projectEnvironments.map((env) => (
+                <option key={env.id} value={env.id}>
+                  {env.name} ({env.environmentType})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <label className="cf-checkbox-inline">
             <input
               type="checkbox"
@@ -1504,6 +1619,7 @@ export function CloudForgePipelinesPanel() {
                             updateStageRow(stage.localId, (row) => ({
                               ...row,
                               allowedOperation: e.target.value,
+                              secretBindings: e.target.value ? row.secretBindings : [],
                             }))
                           }
                         >
@@ -1518,6 +1634,127 @@ export function CloudForgePipelinesPanel() {
                         <div className="cf-stage-capability-note">
                           Declarative stage — isolated execution for {formatStageTypeLabel(stage.stageType)}{' '}
                           stages is planned for later phases (arbitrary builds/deployments disabled).
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="cf-field">
+                      <div className="cf-jobs-section__header">
+                        <span className="cf-field__label">
+                          Authorized Secret Bindings (Phase 3.4)
+                        </span>
+                        {(ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 &&
+                          stage.allowedOperation &&
+                          formTargetEnvId &&
+                          availableSecrets.length > 0 && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={() =>
+                                updateStageRow(stage.localId, (row) => {
+                                  const firstUnused =
+                                    availableSecrets.find(
+                                      (s) => !row.secretBindings.some((b) => b.secretId === s.id)
+                                    ) ?? availableSecrets[0];
+                                  return {
+                                    ...row,
+                                    secretBindings: [
+                                      ...row.secretBindings,
+                                      {
+                                        secretId: firstUnused.id,
+                                        deliveryAlias: firstUnused.name,
+                                      },
+                                    ],
+                                  };
+                                })
+                              }
+                            >
+                              <KeyRound size={12} aria-hidden="true" />
+                              <span>Bind Secret Reference</span>
+                            </button>
+                          )}
+                      </div>
+
+                      {!(
+                        (ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 &&
+                        stage.allowedOperation
+                      ) ? (
+                        <div className="cf-stage-capability-note">
+                          Secret injection is blocked for declarative, build, scan, package, or deployment stages.
+                        </div>
+                      ) : !formTargetEnvId ? (
+                        <div className="cf-stage-capability-note">
+                          Select a Target Secret Environment above to authorize encrypted secret references for this stage.
+                        </div>
+                      ) : availableSecrets.length === 0 ? (
+                        <div className="cf-stage-capability-note">
+                          No active encrypted secrets exist in the selected environment yet.
+                        </div>
+                      ) : stage.secretBindings.length === 0 ? (
+                        <div className="cf-stage-capability-note">
+                          No secrets bound to this stage (zero secrets will be delivered to workers).
+                        </div>
+                      ) : (
+                        <div className="cf-secret-binding-list">
+                          {stage.secretBindings.map((binding, bIdx) => (
+                            <div key={`${binding.secretId}-${bIdx}`} className="cf-secret-binding-row">
+                              <select
+                                className="cf-select mono"
+                                aria-label={`Bound secret ${bIdx + 1}`}
+                                value={binding.secretId}
+                                onChange={(e) => {
+                                  const chosen = availableSecrets.find((s) => s.id === e.target.value);
+                                  updateStageRow(stage.localId, (row) => ({
+                                    ...row,
+                                    secretBindings: row.secretBindings.map((item, idx2) =>
+                                      idx2 === bIdx
+                                        ? {
+                                            secretId: e.target.value,
+                                            deliveryAlias: chosen ? chosen.name : item.deliveryAlias,
+                                          }
+                                        : item
+                                    ),
+                                  }));
+                                }}
+                              >
+                                {availableSecrets.map((sec) => (
+                                  <option key={sec.id} value={sec.id}>
+                                    {sec.name} (v{sec.currentVersionNumber})
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="text"
+                                className="cf-input mono"
+                                placeholder="DELIVERY_ALIAS"
+                                aria-label={`Delivery alias ${bIdx + 1}`}
+                                value={binding.deliveryAlias}
+                                onChange={(e) =>
+                                  updateStageRow(stage.localId, (row) => ({
+                                    ...row,
+                                    secretBindings: row.secretBindings.map((item, idx2) =>
+                                      idx2 === bIdx
+                                        ? { ...item, deliveryAlias: e.target.value.toUpperCase() }
+                                        : item
+                                    ),
+                                  }))
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-danger"
+                                aria-label={`Remove secret binding ${bIdx + 1}`}
+                                onClick={() =>
+                                  updateStageRow(stage.localId, (row) => ({
+                                    ...row,
+                                    secretBindings: row.secretBindings.filter((_, idx2) => idx2 !== bIdx),
+                                  }))
+                                }
+                              >
+                                <Trash2 size={12} aria-hidden="true" />
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -1594,6 +1831,24 @@ export function CloudForgePipelinesPanel() {
                 </p>
               </div>
             </div>
+
+            {queueingDef.hasSecretBindings && (
+              <div className="cf-notice cf-notice--info" role="status">
+                <div className="cf-notice__icon" aria-hidden="true">
+                  <ShieldCheck size={17} />
+                </div>
+                <div>
+                  <p className="cf-notice__title">
+                    Queue-time secret pinning ({queueingDef.targetEnvironmentName ?? 'Environment'})
+                  </p>
+                  <p className="cf-notice__text">
+                    Queueing resolves active secret versions from {queueingDef.targetEnvironmentName ?? 'the target environment'}{' '}
+                    into immutable pinned references without decrypting values. Worker delivery remains
+                    gated by active leases and revocation state.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {queueRunError && (
               <div className="cf-notice cf-notice--error" role="alert">
@@ -1733,6 +1988,14 @@ export function CloudForgePipelinesPanel() {
                 <dt>Project</dt>
                 <dd>{selectedRun.projectName}</dd>
               </div>
+              {selectedRun.targetEnvironmentName && (
+                <div className="cf-kv-item">
+                  <dt>Target Environment</dt>
+                  <dd className="mono">
+                    {selectedRun.targetEnvironmentName} ({selectedRun.targetEnvironmentType})
+                  </dd>
+                </div>
+              )}
               <div className="cf-kv-item">
                 <dt>Source Repository</dt>
                 <dd className="mono">{selectedRun.repositoryFullName ?? '—'}</dd>
@@ -1797,6 +2060,18 @@ export function CloudForgePipelinesPanel() {
                           </span>
                           {stage.allowedOperation && (
                             <span className="cf-stage-pill">{stage.allowedOperation}</span>
+                          )}
+                          {(stage.secretBindings?.length ?? 0) > 0 && (
+                            <span className="cf-secret-ref-pill">
+                              <KeyRound size={11} aria-hidden="true" />
+                              <span>
+                                {stage.secretBindings!.map((b) =>
+                                  b.pinnedVersionNumber
+                                    ? `${b.deliveryAlias} (v${b.pinnedVersionNumber})`
+                                    : b.deliveryAlias
+                                ).join(', ')}
+                              </span>
+                            </span>
                           )}
                         </div>
                         <StatusBadge

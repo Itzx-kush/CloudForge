@@ -25,7 +25,7 @@ class FlywayMigrationTest {
     @Test
     void appliesAllMigrationsAndCreatesExpectedTables() {
         MigrationInfo[] applied = flyway.info().applied();
-        assertThat(applied).hasSizeGreaterThanOrEqualTo(5);
+        assertThat(applied).hasSizeGreaterThanOrEqualTo(6);
 
         List<String> expectedTables = List.of(
                 "users",
@@ -48,7 +48,11 @@ class FlywayMigrationTest {
                 "worker_nodes",
                 "worker_credentials",
                 "stage_execution_attempts",
-                "stage_execution_logs"
+                "stage_execution_logs",
+                "environment_secrets",
+                "environment_secret_versions",
+                "pipeline_run_secret_references",
+                "secret_key_rotation_runs"
         );
 
         for (String table : expectedTables) {

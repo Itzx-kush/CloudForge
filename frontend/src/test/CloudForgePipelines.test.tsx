@@ -374,6 +374,57 @@ function mockOrchestrationApi(options?: {
     }
 
     // Projects & repositories used by CloudForgePipelinesPanel
+    if (url.includes('/projects/proj-1') && !url.includes('/secrets') && method === 'GET') {
+      return jsonResponse({
+        ...SAMPLE_PROJECTS[0],
+        environments: [
+          {
+            id: 'env-stg',
+            projectId: 'proj-1',
+            name: 'Staging',
+            environmentType: 'STAGING',
+            branchOverride: null,
+            configVariables: {},
+            notes: null,
+            createdAt: '2026-11-20T09:00:00Z',
+            updatedAt: '2026-11-24T09:00:00Z',
+          },
+        ],
+      });
+    }
+    if (url.includes('/environments/env-stg/secrets') && method === 'GET') {
+      return jsonResponse({
+        items: [
+          {
+            id: 'sec-stg-1',
+            workspaceId: 'ws-1',
+            projectId: 'proj-1',
+            environmentId: 'env-stg',
+            environmentName: 'Staging',
+            environmentType: 'STAGING',
+            name: 'STAGING_DEPLOY_KEY',
+            description: 'Staging token',
+            status: 'ACTIVE',
+            currentVersionNumber: 3,
+            currentVersionId: 'ver-3',
+            currentKekId: 'kek-v1',
+            encryptionAlgorithm: 'AES-256-GCM',
+            encryptionFormatVersion: 1,
+            createdByUsername: 'kush-dev',
+            updatedByUsername: 'kush-dev',
+            createdAt: '2026-11-20T09:00:00Z',
+            updatedAt: '2026-11-24T09:00:00Z',
+            lastRotatedAt: null,
+            revokedAt: null,
+            revokedByUsername: null,
+          },
+        ],
+        page: 0,
+        size: 100,
+        totalElements: 1,
+        totalPages: 1,
+      });
+    }
     if (url.includes('/projects') && method === 'GET') {
       return jsonResponse({
         items: projects,
@@ -1077,5 +1128,93 @@ describe('CloudForge Phase 3.2 Pipeline Orchestration UI', () => {
       within(drawer).getByText(/uid=65534 Read-only root filesystem verified <script>alert\(1\)<\/script>/i)
     ).toBeInTheDocument();
     expect(drawer.querySelector('script')).toBeNull();
+  }, 15000);
+
+  it('supports owner-only secret bindings selector on approved stages and blocks DEVELOPER queueing of secret-bearing pipelines', async () => {
+    const user = userEvent.setup();
+    const secretBoundDef: PipelineDefinition = {
+      ...SAMPLE_DEFINITIONS[0],
+      id: 'def-sec-1',
+      name: 'Secret Verified Pipeline',
+      targetEnvironmentId: 'env-stg',
+      targetEnvironmentName: 'Staging',
+      targetEnvironmentType: 'STAGING',
+      hasSecretBindings: true,
+      stages: [
+        {
+          id: 'st-sec-1',
+          stageKey: 'source',
+          displayName: 'Source Validation',
+          stageType: 'SOURCE_PREP',
+          executionOrder: 0,
+          dependsOn: [],
+          timeoutSeconds: 300,
+          maxRetries: 0,
+          allowFailure: false,
+          metadata: { operation: 'ENV_VALIDATION' },
+          secretBindings: [
+            {
+              secretId: 'sec-stg-1',
+              secretName: 'STAGING_DEPLOY_KEY',
+              deliveryAlias: 'RUNTIME_API_KEY',
+              environmentId: 'env-stg',
+              pinnedVersionNumber: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const capturedPayloads: unknown[] = [];
+    mockOrchestrationApi({
+      role: 'OWNER',
+      definitions: [secretBoundDef],
+      onCreateDefinition: (body) => {
+        capturedPayloads.push(body);
+        return jsonResponse(secretBoundDef, 201);
+      },
+    });
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/pipelines']}>
+        <AppRoutes />
+      </MemoryRouter>
+    );
+
+    await openCloudForgePipelinesTab(user);
+    expect(screen.getByText('Staging Secrets')).toBeInTheDocument();
+
+    // Open New Pipeline Definition modal and bind an authorized environment secret reference
+    await user.click(screen.getByRole('button', { name: /New Pipeline Definition/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/Pipeline Name/i), 'Secret Bound Pipeline');
+    await user.selectOptions(within(dialog).getByLabelText(/Target Secret Environment/i), 'env-stg');
+
+    const bindButtons = await within(dialog).findAllByRole('button', { name: /Bind Secret Reference/i });
+    await user.click(bindButtons[0]);
+    expect(await within(dialog).findByLabelText(/Bound secret 1/i)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: /Create Pipeline Definition/i }));
+    await waitFor(() => {
+      expect(capturedPayloads).toHaveLength(1);
+    });
+    const sent = capturedPayloads[0] as { targetEnvironmentId?: string; stages: Array<{ secretBindings?: unknown[] }> };
+    expect(sent.targetEnvironmentId).toBe('env-stg');
+    expect(sent.stages[0].secretBindings?.length).toBe(1);
+
+    unmount();
+    vi.restoreAllMocks();
+
+    // DEVELOPER cannot queue a secret-bearing pipeline
+    mockOrchestrationApi({ role: 'DEVELOPER', definitions: [secretBoundDef] });
+    render(
+      <MemoryRouter initialEntries={['/pipelines']}>
+        <AppRoutes />
+      </MemoryRouter>
+    );
+    await openCloudForgePipelinesTab(user);
+    const defsTable = screen.getByRole('table', { name: 'CloudForge pipeline definitions' });
+    const queueBtn = within(defsTable).getByRole('button', { name: /Queue Run/i });
+    expect(queueBtn).toBeDisabled();
   }, 15000);
 });

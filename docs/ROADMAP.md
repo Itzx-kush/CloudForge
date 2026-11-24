@@ -1,6 +1,6 @@
 # CloudForge Development Roadmap
 
-This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.3)** functionality from **Planned (Phases 3.4–4)** capabilities.
+This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.4)** functionality from **Planned (Phases 3.5–4)** capabilities.
 
 ---
 
@@ -67,9 +67,20 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.3
 
 ---
 
-## Phases 3.4–3.7 — Encrypted Secrets, Container Registry, Kubernetes & Rollback (**Planned**)
+## Phase 3.4 — Encrypted Secret Management, Key Management & Secure Worker Delivery (**Implemented**)
 
-- [ ] **Phase 3.4 — Encrypted Secret Storage:** Introduce KMS / External Secrets integration for project environment secrets (deferred from Phase 2) and hardened multi-tenant sandbox isolation (e.g., gVisor / Kata / Firecracker) before permitting untrusted repository builds.
+- [x] **AES-256-GCM Envelope Encryption (`SecretCryptoService` & `EnvKeyringSecretKeyProvider`):** Fresh 256-bit DEKs, fresh 96-bit CSPRNG nonces, 128-bit GCM auth tags, deterministic length-prefixed AAD binding workspace/project/environment/secret/version/format, external 256-bit Base64 KEK validation, historical key support, and fail-closed unconfigured states (`CLOUDFORGE_SECRETS_ENABLED=false` default).
+- [x] **PostgreSQL Persistence (`V6__encrypted_secret_management.sql`):** Non-destructive Flyway migration adding `environment_secrets`, `environment_secret_versions` (`BYTEA` ciphertext/nonce/wrapped_dek + `octet_length(nonce) = 12` constraint), `pipeline_run_secret_references`, and `secret_key_rotation_runs`.
+- [x] **Write-Only REST APIs & Conservative RBAC:** `OWNER`-restricted metadata CRUD, version rotation, version/secret revocation, soft deletion, `Cache-Control: no-store`, CSRF protection, and cooldown rate-limited `SECRET_ACCESS_DENIED` auditing. Non-secret environment variables remain cleanly separated and continue blocking plaintext secrets.
+- [x] **Pipeline Secret Bindings & Queue-Time Pinning:** Validated single-environment stage secret bindings restricted to allowlisted worker operations (`SOURCE_PREP` / `TEST`), immutable version pinning in `pipeline_run_secret_references` without decrypting at queue time, and `OWNER`-only queueing for secret-bearing pipelines.
+- [x] **Lease-Bound Worker Delivery, Operator Key Rotation & Multi-Layer Redaction:** Fenced internal worker delivery endpoint (`/api/internal/workers/{workerId}/attempts/{attemptId}/secrets`) disabled by default (`worker-delivery-enabled=false`, locked off in Render), DEK-only batch master key rotation (`/api/internal/operator/secrets/keys/**`), ephemeral stdin-only secret injection in `worker/`, and raw/multiline/Base64/URL-encoded/cross-chunk boundary redaction across worker & control plane.
+- [x] **Premium Frontend Integration:** Dedicated `EnvironmentSecretsPanel` inside `ProjectDetailPage` (metadata-only table, masked write-only modals cleared immediately on close/submit, version history, revoke/delete confirmations) and Target Environment + secret-reference selector inside `CloudForgePipelinesPanel`. See `docs/PHASE3_4_SECRET_MANAGEMENT.md`.
+
+---
+
+## Phases 3.5–3.7 — Container Registry, Kubernetes & Rollback (**Planned**)
+
+- [ ] **MicroVM / Hardened Sandbox Isolation:** Introduce gVisor / Kata / Firecracker sandboxed execution before permitting untrusted repository builds.
 - [ ] **Phase 3.5 — Docker Image Deployment & OCI Registry:** Push immutable, content-addressed OCI digests to a configured container registry.
 - [ ] **Phase 3.6 — Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy projects to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.
 - [ ] **Phase 3.7 — Deployment History & Rollback:** Persist every release revision (commit SHA, image digest, manifest checksum, actor, outcome) and provide one-click rollback to previously verified healthy releases.

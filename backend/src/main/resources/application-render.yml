@@ -16,8 +16,11 @@ spring:
       maximum-pool-size: 5
       minimum-idle: 1
 
-# Render web services have no Docker daemon and must never activate local worker execution.
+# Render web services have no Docker daemon and must never activate local worker execution or worker secret delivery.
 cloudforge:
   workers:
     enabled: false
     scheduler-enabled: false
+  secrets:
+    worker-delivery-enabled: false
+    allow-insecure-local-delivery: false

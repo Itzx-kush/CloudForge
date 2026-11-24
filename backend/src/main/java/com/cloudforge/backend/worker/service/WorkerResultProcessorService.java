@@ -13,6 +13,7 @@ import com.cloudforge.backend.orchestration.entity.PipelineStageStatus;
 import com.cloudforge.backend.orchestration.repository.PipelineRunEventRepository;
 import com.cloudforge.backend.orchestration.repository.PipelineRunRepository;
 import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepository;
+import com.cloudforge.backend.secrets.service.AttemptSecretRedactionService;
 import com.cloudforge.backend.service.AuditService;
 import com.cloudforge.backend.service.WorkspaceAuthorizationService;
 import com.cloudforge.backend.worker.config.WorkerProperties;
@@ -58,6 +59,7 @@ public class WorkerResultProcessorService {
     private final WorkspaceAuthorizationService authorizationService;
     private final AuditService auditService;
     private final LogSanitizer logSanitizer;
+    private final AttemptSecretRedactionService attemptSecretRedactionService;
     private final ObjectMapper objectMapper;
 
     public WorkerResultProcessorService(
@@ -70,6 +72,7 @@ public class WorkerResultProcessorService {
             WorkspaceAuthorizationService authorizationService,
             AuditService auditService,
             LogSanitizer logSanitizer,
+            AttemptSecretRedactionService attemptSecretRedactionService,
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
@@ -81,6 +84,7 @@ public class WorkerResultProcessorService {
         this.authorizationService = authorizationService;
         this.auditService = auditService;
         this.logSanitizer = logSanitizer;
+        this.attemptSecretRedactionService = attemptSecretRedactionService;
         this.objectMapper = objectMapper;
     }
 
@@ -173,11 +177,13 @@ public class WorkerResultProcessorService {
             throw new BadRequestException("Cannot report CANCELLED until isolated execution termination is confirmed");
         }
 
+        List<String> attemptSecrets = attemptSecretRedactionService.resolveSecretsForAttemptRedaction(attempt);
         String safeSummary = logSanitizer.sanitize(
                 StringUtils.hasText(request.summary())
                         ? request.summary().trim()
                         : "Attempt #" + attempt.getAttemptNumber() + " ended with status " + reportedStatus,
-                480
+                480,
+                attemptSecrets
         ).message();
 
         AttemptFailureCategory category = resolveFailureCategory(reportedStatus, request.failureCategory());
@@ -186,7 +192,7 @@ public class WorkerResultProcessorService {
         attempt.setFailureCategory(category);
         attempt.setExitCode(request.exitCode());
         attempt.setSummary(safeSummary);
-        attempt.setResourceUsageJson(writeJson(sanitizeResourceUsage(request.resourceUsage())));
+        attempt.setResourceUsageJson(writeJson(sanitizeResourceUsage(request.resourceUsage(), attemptSecrets)));
         if (attempt.getStartedAt() == null) {
             attempt.setStartedAt(request.startedAt() != null ? request.startedAt() : attempt.getLeaseStartedAt());
         }
@@ -535,7 +541,7 @@ public class WorkerResultProcessorService {
         return AttemptFailureCategory.OPERATION_FAILURE;
     }
 
-    private Map<String, Object> sanitizeResourceUsage(Map<String, Object> raw) {
+    private Map<String, Object> sanitizeResourceUsage(Map<String, Object> raw, List<String> attemptSecrets) {
         if (raw == null || raw.isEmpty()) {
             return Map.of();
         }
@@ -551,7 +557,7 @@ public class WorkerResultProcessorService {
                 if (v instanceof Number || v instanceof Boolean) {
                     safe.put(k, v);
                 } else {
-                    safe.put(k, logSanitizer.sanitize(String.valueOf(v), 120).message());
+                    safe.put(k, logSanitizer.sanitize(String.valueOf(v), 120, attemptSecrets).message());
                 }
                 count++;
             }

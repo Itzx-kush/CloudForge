@@ -94,6 +94,26 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
     }
 
     @Override
+    public SecretDeliveryResult fetchAttemptSecrets(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        if (!config.secretDeliveryEnabled()) {
+            throw new IllegalStateException("Worker secret delivery is disabled in WorkerAgentConfig");
+        }
+        return postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/secrets",
+                Map.of(
+                        "leaseToken", leaseToken,
+                        "fencingGeneration", fencingGeneration
+                ),
+                SecretDeliveryResult.class
+        );
+    }
+
+    @Override
     public void appendLogs(
             String workerId,
             UUID attemptId,
@@ -144,9 +164,10 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
                 }
                 return objectMapper.readValue(response.body(), responseType);
             }
+            String safeBody = path.endsWith("/secrets") ? "[REDACTED]" : response.body();
             throw new IllegalStateException(
                     "Control-plane request POST " + path + " failed with HTTP "
-                            + response.statusCode() + ": " + response.body()
+                            + response.statusCode() + ": " + safeBody
             );
         } catch (IllegalStateException ex) {
             throw ex;

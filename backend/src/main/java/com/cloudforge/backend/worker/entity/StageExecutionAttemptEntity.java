@@ -96,6 +96,12 @@ public class StageExecutionAttemptEntity extends BaseAuditableEntity {
     @Column(name = "recovered_at")
     private Instant recoveredAt;
 
+    @Column(name = "secret_delivery_count", nullable = false)
+    private int secretDeliveryCount = 0;
+
+    @Column(name = "last_secret_delivery_at")
+    private Instant lastSecretDeliveryAt;
+
     @Version
     @Column(name = "row_version", nullable = false)
     private Long rowVersion = 0L;
@@ -278,5 +284,21 @@ public class StageExecutionAttemptEntity extends BaseAuditableEntity {
 
     public Long getRowVersion() {
         return rowVersion;
+    }
+
+    public int getSecretDeliveryCount() {
+        return secretDeliveryCount;
+    }
+
+    public void setSecretDeliveryCount(int secretDeliveryCount) {
+        this.secretDeliveryCount = secretDeliveryCount;
+    }
+
+    public Instant getLastSecretDeliveryAt() {
+        return lastSecretDeliveryAt;
+    }
+
+    public void setLastSecretDeliveryAt(Instant lastSecretDeliveryAt) {
+        this.lastSecretDeliveryAt = lastSecretDeliveryAt;
     }
 }

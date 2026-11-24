@@ -5,6 +5,7 @@ import com.cloudforge.backend.exception.ConflictException;
 import com.cloudforge.backend.exception.ForbiddenOperationException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
 import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepository;
+import com.cloudforge.backend.secrets.service.AttemptSecretRedactionService;
 import com.cloudforge.backend.service.WorkspaceAuthorizationService;
 import com.cloudforge.backend.worker.config.WorkerProperties;
 import com.cloudforge.backend.worker.dto.AppendExecutionLogsRequest;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -37,6 +39,7 @@ public class WorkerExecutionLogService {
     private final PipelineStageRunRepository stageRunRepository;
     private final WorkspaceAuthorizationService authorizationService;
     private final LogSanitizer logSanitizer;
+    private final AttemptSecretRedactionService attemptSecretRedactionService;
 
     public WorkerExecutionLogService(
             WorkerProperties workerProperties,
@@ -44,7 +47,8 @@ public class WorkerExecutionLogService {
             StageExecutionLogRepository logRepository,
             PipelineStageRunRepository stageRunRepository,
             WorkspaceAuthorizationService authorizationService,
-            LogSanitizer logSanitizer
+            LogSanitizer logSanitizer,
+            AttemptSecretRedactionService attemptSecretRedactionService
     ) {
         this.workerProperties = workerProperties;
         this.attemptRepository = attemptRepository;
@@ -52,6 +56,7 @@ public class WorkerExecutionLogService {
         this.stageRunRepository = stageRunRepository;
         this.authorizationService = authorizationService;
         this.logSanitizer = logSanitizer;
+        this.attemptSecretRedactionService = attemptSecretRedactionService;
     }
 
     @Transactional
@@ -85,6 +90,12 @@ public class WorkerExecutionLogService {
         long existingChars = logRepository.sumMessageCharsByAttemptId(attempt.getId());
         int seq = logRepository.findMaxSequenceNumberByAttemptId(attempt.getId());
 
+        List<String> attemptSecrets = attemptSecretRedactionService.resolveSecretsForAttemptRedaction(attempt);
+        List<String> expandedVariants = logSanitizer.expandSecretVariants(attemptSecrets);
+        StageExecutionLogEntity previousEntity = (!expandedVariants.isEmpty() && existingCount > 0)
+                ? logRepository.findTopByAttemptIdOrderBySequenceNumberDesc(attempt.getId()).orElse(null)
+                : null;
+
         int accepted = 0;
         int dropped = 0;
         boolean limitReached = existingCount >= maxLines || existingChars >= maxBytes;
@@ -95,9 +106,22 @@ public class WorkerExecutionLogService {
                 dropped++;
                 continue;
             }
-            LogSanitizer.SanitizedLogResult sanitized = logSanitizer.sanitize(input.message(), maxMsgLen);
+            LogSanitizer.SanitizedLogResult sanitized = logSanitizer.sanitize(input.message(), maxMsgLen, attemptSecrets);
             String msg = sanitized.message();
             boolean truncated = sanitized.truncated();
+
+            if (previousEntity != null && !expandedVariants.isEmpty()) {
+                LogSanitizer.BoundaryRedactionResult boundary = logSanitizer.redactBoundarySpan(
+                        previousEntity.getMessage(),
+                        msg,
+                        expandedVariants
+                );
+                if (boundary.previousModified()) {
+                    previousEntity.setMessage(boundary.previousMessage());
+                    logRepository.save(previousEntity);
+                    msg = boundary.currentMessage();
+                }
+            }
 
             long remainingChars = maxBytes - existingChars;
             if (msg.length() > remainingChars) {
@@ -120,7 +144,7 @@ public class WorkerExecutionLogService {
             entity.setTruncated(truncated);
             entity.setOccurredAt(input.occurredAt() != null ? input.occurredAt() : Instant.now());
 
-            logRepository.save(entity);
+            previousEntity = logRepository.save(entity);
             existingCount++;
             existingChars += msg.length();
             accepted++;

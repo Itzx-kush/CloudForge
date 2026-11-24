@@ -1,6 +1,14 @@
 package com.cloudforge.backend.integration;
 
+import com.cloudforge.backend.entity.EnvironmentType;
 import com.cloudforge.backend.entity.GitHubInstallationEntity;
+import com.cloudforge.backend.entity.ProjectEnvironmentEntity;
+import com.cloudforge.backend.repository.ProjectEnvironmentRepository;
+import com.cloudforge.backend.secrets.entity.EnvironmentSecretEntity;
+import com.cloudforge.backend.secrets.entity.EnvironmentSecretVersionEntity;
+import com.cloudforge.backend.secrets.entity.SecretLifecycleStatus;
+import com.cloudforge.backend.secrets.repository.EnvironmentSecretRepository;
+import com.cloudforge.backend.secrets.repository.EnvironmentSecretVersionRepository;
 import com.cloudforge.backend.entity.GitHubWorkflowEntity;
 import com.cloudforge.backend.entity.GitHubWorkflowRunEntity;
 import com.cloudforge.backend.entity.InstallationStatus;
@@ -120,6 +128,12 @@ class PostgresSearchQueryRegressionTest {
 
     @Autowired
     private ProjectRepository projectRepository;
+    @Autowired
+    private ProjectEnvironmentRepository projectEnvironmentRepository;
+    @Autowired
+    private EnvironmentSecretRepository environmentSecretRepository;
+    @Autowired
+    private EnvironmentSecretVersionRepository environmentSecretVersionRepository;
 
     @Autowired
     private AuditEventRepository auditEventRepository;
@@ -561,6 +575,50 @@ class PostgresSearchQueryRegressionTest {
         );
         assertThat(storedLogs.items()).hasSize(1);
         assertThat(storedLogs.items().get(0).message()).contains("[REDACTED]").doesNotContain("secret_pg_token_12345");
+
+        // Phase 3.4: PostgreSQL encrypted secret storage & typed Criteria search with nullable filters
+        ProjectEnvironmentEntity pgEnv = new ProjectEnvironmentEntity();
+        pgEnv.setProject(projectA1);
+        pgEnv.setName("PG Staging");
+        pgEnv.setEnvironmentType(EnvironmentType.STAGING);
+        pgEnv.setConfigVariablesJson("{}");
+        pgEnv = projectEnvironmentRepository.saveAndFlush(pgEnv);
+
+        EnvironmentSecretEntity pgSecret = new EnvironmentSecretEntity();
+        pgSecret.setWorkspace(workspaceA);
+        pgSecret.setProject(projectA1);
+        pgSecret.setEnvironment(pgEnv);
+        pgSecret.setSecretName("PG_RUNTIME_TOKEN");
+        pgSecret.setNameLockKey("PG_RUNTIME_TOKEN");
+        pgSecret.setDescription("Postgres BYTEA & criteria check");
+        pgSecret.setStatus(SecretLifecycleStatus.ACTIVE);
+        pgSecret.setCurrentVersionNumber(1);
+        pgSecret = environmentSecretRepository.saveAndFlush(pgSecret);
+
+        EnvironmentSecretVersionEntity pgVer = new EnvironmentSecretVersionEntity();
+        pgVer.setWorkspace(workspaceA);
+        pgVer.setProject(projectA1);
+        pgVer.setEnvironment(pgEnv);
+        pgVer.setSecret(pgSecret);
+        pgVer.setVersionNumber(1);
+        pgVer.setCiphertext("encrypted-bytes-payload".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        pgVer.setNonce("123456789012".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        pgVer.setWrappedDek("wrapped-dek-payload".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        pgVer.setKekId("pg-kek-v1");
+        pgVer = environmentSecretVersionRepository.saveAndFlush(pgVer);
+        pgSecret.setCurrentVersionId(pgVer.getId());
+        environmentSecretRepository.saveAndFlush(pgSecret);
+
+        var nullSearchSecrets = environmentSecretRepository.searchByEnvironment(
+                workspaceA.getId(), projectA1.getId(), pgEnv.getId(),
+                null, false, null, PageRequest.of(0, 10)
+        );
+        assertThat(nullSearchSecrets.getTotalElements()).isEqualTo(1);
+        var filteredSecrets = environmentSecretRepository.searchByEnvironment(
+                workspaceA.getId(), projectA1.getId(), pgEnv.getId(),
+                SecretLifecycleStatus.ACTIVE, false, "runtime", PageRequest.of(0, 10)
+        );
+        assertThat(filteredSecrets.getTotalElements()).isEqualTo(1);
     }
 
     private LinkedRepositoryEntity saveRepo(

@@ -1,16 +1,19 @@
 package com.cloudforge.worker.executor;
 
 import com.cloudforge.worker.config.WorkerAgentConfig;
+import com.cloudforge.worker.security.WorkerSecretRedactor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -114,6 +117,10 @@ public class DockerIsolatedExecutionAdapter implements IsolatedExecutionAdapter 
         cmd.add("CLOUDFORGE_OPERATION=" + request.allowedOperation());
         cmd.add("--env");
         cmd.add("CLOUDFORGE_ATTEMPT_NUMBER=" + request.attemptNumber());
+        if (request.ephemeralSecrets() != null && !request.ephemeralSecrets().isEmpty()) {
+            // Deliver secrets strictly via ephemeral container stdin stream (never in CLI args, --env, --label, or mounts).
+            cmd.add("-i");
+        }
         cmd.add(config.executorImage());
         cmd.addAll(containerArgs);
         return List.copyOf(cmd);
@@ -132,6 +139,20 @@ public class DockerIsolatedExecutionAdapter implements IsolatedExecutionAdapter 
                     "UNSUPPORTED_OPERATION",
                     126,
                     "Operation \"" + request.allowedOperation() + "\" is not allowlisted for Phase 3.3 isolated execution",
+                    Map.of("executorImage", config.executorImage()),
+                    now,
+                    now,
+                    true
+            );
+        }
+        if (request.ephemeralSecrets() != null && !request.ephemeralSecrets().isEmpty()
+                && !config.secretDeliveryEnabled()) {
+            Instant now = Instant.now();
+            return new ExecutionResult(
+                    "FAILED",
+                    "SECRET_DELIVERY_DISABLED",
+                    126,
+                    "Ephemeral secret consumption refused because CLOUDFORGE_WORKER_SECRET_DELIVERY_ENABLED=false",
                     Map.of("executorImage", config.executorImage()),
                     now,
                     now,
@@ -178,17 +199,25 @@ public class DockerIsolatedExecutionAdapter implements IsolatedExecutionAdapter 
         AtomicInteger capturedLines = new AtomicInteger(0);
         AtomicInteger capturedBytes = new AtomicInteger(0);
 
+        WorkerSecretRedactor redactor = new WorkerSecretRedactor();
+        if (request.ephemeralSecrets() != null && !request.ephemeralSecrets().isEmpty()) {
+            redactor.addSecrets(request.ephemeralSecrets().values());
+        }
+
         try {
             process = new ProcessBuilder(cmd).start();
+            if (request.ephemeralSecrets() != null && !request.ephemeralSecrets().isEmpty()) {
+                writeEphemeralSecretsToStdinAndClose(process.getOutputStream(), request.ephemeralSecrets());
+            }
 
             Process procRef = process;
             Thread stdoutReader = new Thread(() -> drainStream(
                     procRef.getInputStream(), "STDOUT", request.maxLogLines(), request.maxLogBytes(),
-                    capturedLines, capturedBytes, logConsumer
+                    capturedLines, capturedBytes, redactor, logConsumer
             ), "cf-stdout-" + shortId);
             Thread stderrReader = new Thread(() -> drainStream(
                     procRef.getErrorStream(), "STDERR", request.maxLogLines(), request.maxLogBytes(),
-                    capturedLines, capturedBytes, logConsumer
+                    capturedLines, capturedBytes, redactor, logConsumer
             ), "cf-stderr-" + shortId);
             stdoutReader.setDaemon(true);
             stderrReader.setDaemon(true);
@@ -278,22 +307,39 @@ public class DockerIsolatedExecutionAdapter implements IsolatedExecutionAdapter 
                     terminationConfirmed
             );
         } catch (Exception ex) {
-            log.warn("Docker isolated execution infrastructure failure for attempt={}: {}", request.attemptId(), ex.getMessage());
+            String safeErr = redactor.redact(ex.getMessage());
+            log.warn("Docker isolated execution infrastructure failure for attempt={}: {}", request.attemptId(), safeErr);
             terminationConfirmed = terminateAndConfirmContainerGone(containerName, process);
             Instant completedAt = Instant.now();
             return new ExecutionResult(
                     "FAILED",
                     "INFRASTRUCTURE_FAILURE",
                     -1,
-                    "Isolated container infrastructure error: " + ex.getMessage(),
+                    "Isolated container infrastructure error: " + safeErr,
                     Map.of("adapter", adapterType(), "executorImage", config.executorImage()),
                     startedAt,
                     completedAt,
                     terminationConfirmed
             );
         } finally {
+            redactor.clear();
             // Defense-in-depth cleanup targeting strictly this attempt's container name
             forceRemoveContainerQuietly(containerName);
+        }
+    }
+
+    private void writeEphemeralSecretsToStdinAndClose(OutputStream stdin, Map<String, String> secrets) {
+        StringBuilder sb = new StringBuilder();
+        secrets.forEach((alias, value) -> sb.append(alias).append('=').append(value).append('\n'));
+        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+        try (OutputStream out = stdin) {
+            out.write(bytes);
+            out.flush();
+        } catch (Exception ignored) {
+            // Container may exit immediately without reading stdin for non-secret allowlisted commands
+        } finally {
+            Arrays.fill(bytes, (byte) 0);
+            sb.setLength(0);
         }
     }
 
@@ -304,6 +350,7 @@ public class DockerIsolatedExecutionAdapter implements IsolatedExecutionAdapter 
             int maxBytes,
             AtomicInteger lineCounter,
             AtomicInteger byteCounter,
+            WorkerSecretRedactor redactor,
             LogLineConsumer consumer
     ) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
@@ -312,8 +359,9 @@ public class DockerIsolatedExecutionAdapter implements IsolatedExecutionAdapter 
                 if (lineCounter.get() >= maxLines || byteCounter.get() >= maxBytes) {
                     continue;
                 }
-                int len = Math.min(line.length(), 1800);
-                String bounded = line.length() > 1800 ? line.substring(0, 1785) + "... [truncated]" : line;
+                String safeLine = redactor.redact(line);
+                int len = Math.min(safeLine.length(), 1800);
+                String bounded = safeLine.length() > 1800 ? safeLine.substring(0, 1785) + "... [truncated]" : safeLine;
                 lineCounter.incrementAndGet();
                 byteCounter.addAndGet(len);
                 consumer.accept(streamType, bounded, Instant.now());

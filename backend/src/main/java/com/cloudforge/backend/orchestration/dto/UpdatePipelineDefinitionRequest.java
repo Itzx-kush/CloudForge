@@ -18,6 +18,8 @@ public record UpdatePipelineDefinitionRequest(
 
         UUID linkedRepositoryId,
 
+        UUID targetEnvironmentId,
+
         Boolean enabled,
 
         Long expectedRowVersion,
@@ -26,4 +28,14 @@ public record UpdatePipelineDefinitionRequest(
         @Valid
         List<StageDefinitionRequest> stages
 ) {
+    public UpdatePipelineDefinitionRequest(
+            String name,
+            String description,
+            UUID linkedRepositoryId,
+            Boolean enabled,
+            Long expectedRowVersion,
+            List<StageDefinitionRequest> stages
+    ) {
+        this(name, description, linkedRepositoryId, null, enabled, expectedRowVersion, stages);
+    }
 }

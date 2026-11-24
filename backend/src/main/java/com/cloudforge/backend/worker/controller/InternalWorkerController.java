@@ -1,6 +1,9 @@
 package com.cloudforge.backend.worker.controller;
 
 import com.cloudforge.backend.orchestration.engine.WorkerAssignmentContract;
+import com.cloudforge.backend.secrets.dto.WorkerSecretDeliveryRequest;
+import com.cloudforge.backend.secrets.dto.WorkerSecretDeliveryResponse;
+import com.cloudforge.backend.secrets.service.SecretDeliveryService;
 import com.cloudforge.backend.worker.dto.AppendExecutionLogsRequest;
 import com.cloudforge.backend.worker.dto.AppendExecutionLogsResponse;
 import com.cloudforge.backend.worker.dto.AttemptRunningAckRequest;
@@ -16,7 +19,9 @@ import com.cloudforge.backend.worker.service.WorkerExecutionLogService;
 import com.cloudforge.backend.worker.service.WorkerRegistryService;
 import com.cloudforge.backend.worker.service.WorkerResultProcessorService;
 import com.cloudforge.backend.worker.service.WorkerSchedulerService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -43,17 +48,20 @@ public class InternalWorkerController {
     private final WorkerSchedulerService schedulerService;
     private final WorkerExecutionLogService logService;
     private final WorkerResultProcessorService resultProcessorService;
+    private final SecretDeliveryService secretDeliveryService;
 
     public InternalWorkerController(
             WorkerRegistryService registryService,
             WorkerSchedulerService schedulerService,
             WorkerExecutionLogService logService,
-            WorkerResultProcessorService resultProcessorService
+            WorkerResultProcessorService resultProcessorService,
+            SecretDeliveryService secretDeliveryService
     ) {
         this.registryService = registryService;
         this.schedulerService = schedulerService;
         this.logService = logService;
         this.resultProcessorService = resultProcessorService;
+        this.secretDeliveryService = secretDeliveryService;
     }
 
     @PostMapping(
@@ -110,6 +118,27 @@ public class InternalWorkerController {
         return ResponseEntity.ok(
                 resultProcessorService.acknowledgeAttemptRunning(workerId, attemptId, request, principal)
         );
+    }
+
+    @PostMapping(
+            value = "/{workerId}/attempts/{attemptId}/secrets",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    public ResponseEntity<WorkerSecretDeliveryResponse> fetchAttemptSecrets(
+            @PathVariable String workerId,
+            @PathVariable UUID attemptId,
+            @Valid @RequestBody WorkerSecretDeliveryRequest request,
+            HttpServletRequest httpRequest,
+            Authentication authentication
+    ) {
+        WorkerPrincipal principal = requireWorkerPrincipal(authentication);
+        WorkerSecretDeliveryResponse response = secretDeliveryService.deliverSecretsForAttempt(
+                workerId, attemptId, request, principal, httpRequest
+        );
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(response);
     }
 
     @PostMapping(

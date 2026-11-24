@@ -67,7 +67,12 @@ CloudForge enforces strict separation between the **Control Plane** (`backend/`)
 - **Control Plane (`com.cloudforge.backend.worker`):** Manages trusted worker registration (`WorkerRegistryService`), constant-time SHA-256 worker credential authentication (`WorkerCredentialService` + stateless `@Order(1)` `WorkerAuthenticationFilter` on `/api/internal/workers/**`), bounded FIFO `READY`-stage scheduling & atomic fenced leasing (`WorkerSchedulerService`), outcome validation & DAG progression (`WorkerResultProcessorService`), expired lease fencing & crash recovery (`WorkerRecoveryService`), and defense-in-depth sanitized bounded log storage (`WorkerExecutionLogService` + `LogSanitizer`). Never executes Docker commands or mounts `/var/run/docker.sock`; disabled by default (`cloudforge.workers.enabled=false`) and locked off in `application-render.yml`.
 - **Execution Plane (`worker/` — standalone `cloudforge-worker.jar`):** Runs as a separate host-side development process (`CloudForgeWorkerApplication` -> `WorkerAgentLoop` -> `HttpControlPlaneClient` -> `DockerIsolatedExecutionAdapter`). Executes ONLY compile-time allowlisted operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`) inside ephemeral, hardened Docker containers (`--rm`, `--user 65534:65534`, `--cap-drop=ALL`, `no-new-privileges:true`, `--read-only`, bounded `noexec` `/tmp`, `--network=none`, CPU/memory/PID limits, pinned/allowlisted images only). See `docs/PHASE3_3_ISOLATED_WORKERS.md`.
 
-### 2.6 Backend Package Structure (`com.cloudforge.backend`)
+### 2.6 Encrypted Secret Management & Key Management (Phase 3.4 — `com.cloudforge.backend.secrets`)
+
+- **Cryptographic Envelope & External Key Providers (`secrets.crypto`):** `SecretCryptoService` encrypts each secret version with a freshly generated 256-bit DEK (`AES-256-GCM`, 96-bit CSPRNG nonce, 128-bit auth tag, deterministic AAD over workspace, project, environment, secret ID, version, and format version). `SecretKeyProvider` (`EnvKeyringSecretKeyProvider` in Phase 3.4) wraps DEKs under externally supplied versioned 256-bit master KEKs with zero plaintext keys in PostgreSQL and fail-closed startup/runtime validation.
+- **Lifecycle, Pipeline Pinning & Lease-Bound Worker Delivery (`secrets.service`, `secrets.controller`):** `SecretManagementService` & `EnvironmentSecretController` provide `OWNER`-restricted, write-only CRUD (`POST /secrets`, `/rotate`, `/revoke`, `DELETE`) with `Cache-Control: no-store`. `PipelineDefinitionService` and `PipelineOrchestrationService` validate per-stage secret references on approved worker stages (`SOURCE_PREP` / `TEST` allowlisted ops) within a single project target environment and pin immutable secret versions on queue without decrypting. `SecretDeliveryService` gates internal worker secret fetches on active lease, lease token, fencing generation, HTTPS/loopback opt-in, revocation status, and bounded replay limits (`workerDeliveryEnabled=false` by default). `SecretKeyRotationService` & `OperatorSecretKeyController` support operator-only DEK-only batch rewrapping across master key rotations, while `LogSanitizer`, `AttemptSecretRedactionService`, and `worker/`'s `WorkerSecretRedactor` strip leaked encoded/multiline/boundary-spanning secrets. See `docs/PHASE3_4_SECRET_MANAGEMENT.md`.
+
+### 2.7 Backend Package Structure (`com.cloudforge.backend`)
 
 | Package | Responsibility |
 | --- | --- |
@@ -75,6 +80,7 @@ CloudForge enforces strict separation between the **Control Plane** (`backend/`)
 | `service` | Domain logic (`HealthService`, `UserAccountService`, `WorkspaceAuthorizationService`, `WorkspaceService`, `ProjectService`, `ProjectEnvironmentService`, `GitHubIntegrationService`, `GitHubActionsSyncService`, `PipelineService`, `GitHubWebhookService`, `AuditService`, `AuditQueryService`). |
 | `orchestration` | Phase 3.2 modular pipeline orchestration subsystem (`controller`, `service`, `engine`, `entity`, `repository`, `dto`) managing persistent pipeline definitions, DAG validation, state machines, idempotency, concurrency control, cancellation, and `WorkerAssignmentContract`. |
 | `worker` | Phase 3.3 control-plane worker subsystem (`config`, `security`, `entity`, `repository`, `dto`, `service`, `controller`) handling trusted worker auth, registry, heartbeats, bounded scheduling, atomic fenced leasing, result processing, crash/lease recovery, and sanitized log persistence. |
+| `secrets` | Phase 3.4 encrypted secret management (`config`, `crypto`, `entity`, `repository`, `dto`, `security`, `service`, `controller`) providing AES-256-GCM envelope encryption, `EnvKeyringSecretKeyProvider`, write-only CRUD, operator DEK rewrapping, lease-bound worker delivery, cooldown-protected audit, and defense-in-depth redaction. |
 | `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubTokenScope`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`, typed metadata DTOs & integration exceptions). |
 | `security` | Spring Security filter chain, OAuth 2.0 user service, success/failure handlers, `CloudForgeUserPrincipal`, `RedirectOriginValidator`, SPA CSRF handler/filter, JSON 401/403 handlers. |
 | `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 11 core domain JPA entities + enums (including `GitHubWorkflowEntity`, `GitHubWorkflowRunEntity`, `WorkflowRunNormalizedStatus`). |
@@ -91,20 +97,21 @@ Located under `backend/src/main/resources/db/migration/`:
 - **`V3__github_actions_workflows.sql`:** `github_workflows` and `github_workflow_runs` storing non-sensitive GitHub Actions workflow definitions and execution attempts keyed by `(linked_repository_id, github_run_id, run_attempt)`.
 - **`V4__pipeline_orchestration_engine.sql`:** `pipeline_definitions`, `pipeline_stage_definitions`, `pipeline_runs`, `pipeline_stage_runs`, `pipeline_run_events`, and `pipeline_idempotency_keys` storing workspace-scoped pipeline definitions, immutable run snapshots, DAG stage instances, chronological transition events, and restart-safe idempotency claims.
 - **`V5__isolated_worker_execution.sql`:** Extends `pipeline_runs` / `pipeline_stage_runs` with cancellation-intent, allowlisted operation, retry backoff, and fencing columns, and adds `worker_nodes`, `worker_credentials` (SHA-256 hashes only), `stage_execution_attempts`, and `stage_execution_logs`.
+- **`V6__encrypted_secret_management.sql`:** Extends pipeline definitions, stages, runs, and attempts with target-environment and secret-binding metadata, and creates `environment_secrets`, `environment_secret_versions`, `pipeline_run_secret_references`, and `secret_key_rotation_runs`.
 
-### 2.7 Frontend Architecture (`frontend/`)
+### 2.8 Frontend Architecture (`frontend/`)
 
 - **Framework:** React 19, TypeScript (strict mode), Vite, React Router 7, Obsidian-inspired theme & appearance system (`PreferenceProvider` supporting Dark/Light/System themes, 5 accent palettes, density, and reduced-motion).
 - **State & Auth:** `AuthContext` manages session verification (`/api/auth/me`, `/api/auth/config`), active workspace selection, role awareness, and CSRF-protected logout; `ProtectedRoute` guards authenticated views cleanly.
 - **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, custom per-request headers (such as `Idempotency-Key`), structured `ApiClientError` handling (including `Retry-After` rate-limit parsing), and preserved Phase 1 live `/api/health` probing.
-- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage` (tab-separated Phase 3.1 live GitHub Actions workflows/runs/jobs + Phase 3.2 `CloudForgePipelinesPanel` for declarative pipeline definitions, DAG stage builder, idempotent run queueing, lifecycle event inspection, and cancellation)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
+- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments + **Phase 3.4 write-only `EnvironmentSecretsPanel`**), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage` (tab-separated Phase 3.1 live GitHub Actions workflows/runs/jobs + Phase 3.2/3.3/3.4 `CloudForgePipelinesPanel` for declarative pipeline definitions, DAG stage builder, environment secret bindings, idempotent run queueing, lifecycle event inspection, worker telemetry, and cancellation)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
 - **Future-Phase Blueprint Pages:** `DeploymentsPage` (Phases 3.5–3.7) remains clearly labeled as a planned capability.
 
 ---
 
-## 3. Planned Target Architecture (Phases 3.4–4)
+## 3. Planned Target Architecture (Phases 3.5–4)
 
-> **Status:** Deferred beyond Phase 3.3. Documented to guide incremental delivery.
+> **Status:** Deferred beyond Phase 3.4. Documented to guide incremental delivery.
 
 ```mermaid
 flowchart TB

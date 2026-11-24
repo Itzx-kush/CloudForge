@@ -116,6 +116,20 @@ cloudforge:
     retry-base-backoff-seconds: ${CLOUDFORGE_WORKER_RETRY_BASE_BACKOFF_SECONDS:5}
     max-log-lines-per-attempt: ${CLOUDFORGE_WORKER_MAX_LOG_LINES:250}
     max-log-bytes-per-attempt: ${CLOUDFORGE_WORKER_MAX_LOG_BYTES:65536}
+  secrets:
+    enabled: ${CLOUDFORGE_SECRETS_ENABLED:false}
+    key-provider: ${CLOUDFORGE_SECRETS_KEY_PROVIDER:env-keyring}
+    active-key-id: ${CLOUDFORGE_SECRETS_ACTIVE_KEY_ID:}
+    keyring: ${CLOUDFORGE_SECRETS_KEYRING:}
+    max-secret-value-bytes: ${CLOUDFORGE_SECRETS_MAX_VALUE_BYTES:16384}
+    max-secrets-per-environment: ${CLOUDFORGE_SECRETS_MAX_PER_ENV:100}
+    max-bindings-per-pipeline: ${CLOUDFORGE_SECRETS_MAX_BINDINGS_PER_PIPELINE:25}
+    worker-delivery-enabled: ${CLOUDFORGE_SECRETS_WORKER_DELIVERY_ENABLED:false}
+    allow-insecure-local-delivery: ${CLOUDFORGE_SECRETS_ALLOW_INSECURE_LOCAL_DELIVERY:false}
+    max-deliveries-per-attempt: ${CLOUDFORGE_SECRETS_MAX_DELIVERIES_PER_ATTEMPT:2}
+    denied-audit-cooldown-seconds: ${CLOUDFORGE_SECRETS_DENIED_AUDIT_COOLDOWN_SECONDS:10}
+    operator-rotation-enabled: ${CLOUDFORGE_SECRETS_OPERATOR_ROTATION_ENABLED:false}
+    operator-rotation-token: ${CLOUDFORGE_SECRETS_OPERATOR_ROTATION_TOKEN:}
 
 logging:
   level:
