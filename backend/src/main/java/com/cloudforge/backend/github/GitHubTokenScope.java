@@ -10,7 +10,8 @@ import java.util.Map;
 public enum GitHubTokenScope {
 
     REPOSITORY_METADATA(Map.of("metadata", "read")),
-    ACTIONS_READ(Map.of("metadata", "read", "actions", "read"));
+    ACTIONS_READ(Map.of("metadata", "read", "actions", "read")),
+    CONTENTS_READ(Map.of("metadata", "read", "contents", "read"));
 
     private final Map<String, String> permissions;
 

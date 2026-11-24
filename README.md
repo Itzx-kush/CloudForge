@@ -120,6 +120,8 @@ CloudForge/
 
 ---
 
+The [Phase 3.5 source acquisition draft](docs/PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md) adds an opt-in pipeline stage for pinned GitHub archives on a dedicated worker.
+
 ## 6. Testing
 
 ```powershell

@@ -253,8 +253,9 @@ describe('CloudForge Phase 3.4 Encrypted Secrets UI', () => {
 
     expect(await screen.findByText('Persistent Environment Configurations')).toBeInTheDocument();
     expect(await screen.findByText('Encrypted Secrets — Development')).toBeInTheDocument();
-    expect(screen.getByTestId('secret-subsystem-status')).toHaveTextContent('Encryption Active');
-    expect(screen.getByTestId('secret-subsystem-status')).toHaveTextContent('kek-v1');
+    const subsystemStatus = await screen.findByTestId('secret-subsystem-status');
+    expect(subsystemStatus).toHaveTextContent('Encryption Active');
+    expect(subsystemStatus).toHaveTextContent('kek-v1');
 
     // Add write-only secret
     await user.click(screen.getByRole('button', { name: /Add Secret/i }));

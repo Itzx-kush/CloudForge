@@ -78,7 +78,9 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.4
 
 ---
 
-## Phases 3.5–3.7 — Container Registry, Kubernetes & Rollback (**Planned**)
+## Phases 3.5–3.7 — Container Registry, Kubernetes & Rollback
+
+- [x] **Phase 3.5 source acquisition draft:** Pin a GitHub branch or tag to its commit and verify a bounded archive on a dedicated worker. See the [source acquisition runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md).
 
 - [ ] **MicroVM / Hardened Sandbox Isolation:** Introduce gVisor / Kata / Firecracker sandboxed execution before permitting untrusted repository builds.
 - [ ] **Phase 3.5 — Docker Image Deployment & OCI Registry:** Push immutable, content-addressed OCI digests to a configured container registry.

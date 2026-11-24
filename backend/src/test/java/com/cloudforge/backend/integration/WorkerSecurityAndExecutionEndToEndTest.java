@@ -1,17 +1,22 @@
 package com.cloudforge.backend.integration;
 
+import com.cloudforge.backend.entity.GitHubInstallationEntity;
+import com.cloudforge.backend.entity.LinkedRepositoryEntity;
 import com.cloudforge.backend.entity.ProjectEntity;
 import com.cloudforge.backend.entity.ProjectStatus;
 import com.cloudforge.backend.entity.UserEntity;
 import com.cloudforge.backend.entity.WorkspaceEntity;
 import com.cloudforge.backend.entity.WorkspaceMemberEntity;
 import com.cloudforge.backend.entity.WorkspaceRole;
+import com.cloudforge.backend.github.GitHubSourceClient;
 import com.cloudforge.backend.orchestration.entity.PipelineRunStatus;
 import com.cloudforge.backend.orchestration.entity.PipelineStageStatus;
 import com.cloudforge.backend.orchestration.repository.PipelineRunEventRepository;
 import com.cloudforge.backend.orchestration.repository.PipelineRunRepository;
 import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepository;
 import com.cloudforge.backend.repository.AuditEventRepository;
+import com.cloudforge.backend.repository.GitHubInstallationRepository;
+import com.cloudforge.backend.repository.LinkedRepositoryRepository;
 import com.cloudforge.backend.repository.ProjectRepository;
 import com.cloudforge.backend.repository.WorkspaceMemberRepository;
 import com.cloudforge.backend.service.UserAccountService;
@@ -33,15 +38,19 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.UUID;
 
 import static com.cloudforge.backend.support.TestAuthSupport.authenticatedUser;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -60,7 +69,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @TestPropertySource(properties = {
+        "spring.datasource.url=jdbc:h2:mem:worker_security_e2e;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1",
         "cloudforge.workers.enabled=true",
+        "CLOUDFORGE_SOURCE_ACQUISITION_ENABLED=true",
+        "CLOUDFORGE_SOURCE_ALLOWED_REPOSITORY_IDS=89114",
+        "CLOUDFORGE_SOURCE_ALLOWED_WORKER_IDS=e2e-worker-1",
         "cloudforge.workers.scheduler-enabled=false",
         "cloudforge.workers.lease-duration-seconds=60",
         "cloudforge.workers.retry-base-backoff-seconds=1",
@@ -88,6 +101,12 @@ class WorkerSecurityAndExecutionEndToEndTest {
     private WorkspaceMemberRepository workspaceMemberRepository;
     @Autowired
     private ProjectRepository projectRepository;
+    @Autowired
+    private GitHubInstallationRepository installations;
+    @Autowired
+    private LinkedRepositoryRepository linkedRepositories;
+    @MockitoBean
+    private GitHubSourceClient githubSource;
     @Autowired
     private WorkerCredentialService workerCredentialService;
     @Autowired
@@ -212,6 +231,104 @@ class WorkerSecurityAndExecutionEndToEndTest {
                         .header("X-CloudForge-Worker-Id", WORKER_1)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + WORKER_1_SECRET))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void sourceRunPinsCommitAndIssuesOneArchiveOnlyToTheFencedHttpsWorker() throws Exception {
+        String sha = "0123456789abcdef0123456789abcdef01234567";
+        GitHubInstallationEntity installation = new GitHubInstallationEntity();
+        installation.setWorkspace(workspaceA);
+        installation.setGithubInstallationId(89113L);
+        installation.setAccountLogin("source-owner");
+        installation.setAccountType("User");
+        installation = installations.saveAndFlush(installation);
+
+        LinkedRepositoryEntity repository = new LinkedRepositoryEntity();
+        repository.setWorkspace(workspaceA);
+        repository.setInstallation(installation);
+        repository.setGithubRepoId(89114L);
+        repository.setOwnerLogin("source-owner");
+        repository.setName("fixture");
+        repository.setFullName("source-owner/fixture");
+        repository.setLastSyncedAt(Instant.now());
+        projectA.setLinkedRepository(linkedRepositories.saveAndFlush(repository));
+        projectRepository.saveAndFlush(projectA);
+
+        var identity = new GitHubSourceClient.Repository(89113L, 89114L, "source-owner", "fixture");
+        when(githubSource.resolveCommit(identity, "refs/heads/main")).thenReturn(sha);
+        when(githubSource.requestArchive(identity, sha)).thenReturn(
+                URI.create("https://codeload.github.com/source-owner/fixture/legacy.zip/" + sha + "?token=fixture"));
+
+        for (String worker : new String[] {WORKER_1, WORKER_2}) {
+            mockMvc.perform(post("/api/internal/workers/register")
+                            .header("X-CloudForge-Worker-Id", worker)
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + (worker.equals(WORKER_1) ? WORKER_1_SECRET : WORKER_2_SECRET))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"workerId":"%s","displayName":"Source worker","adapterType":"GITHUB_SOURCE",
+                                    "supportedOperations":["GITHUB_SOURCE_ACQUIRE"],"maxConcurrency":1}
+                                    """.formatted(worker)))
+                    .andExpect(status().isOk());
+        }
+
+        UUID definitionId = createDefinition("""
+                {"projectId":"%s","name":"GitHub source validation","stages":[
+                  {"stageKey":"source","displayName":"Source","stageType":"SOURCE_PREP",
+                   "metadata":{"operation":"GITHUB_SOURCE_ACQUIRE"}}
+                ]}
+                """.formatted(projectA.getId()));
+        JsonNode run = queueRun(definitionId, "source-immutable-run");
+        assertThat(run.path("commitSha").asText()).isEqualTo(sha);
+        mockMvc.perform(post("/api/internal/workers/{w}/claim", WORKER_2)
+                        .header("X-CloudForge-Worker-Id", WORKER_2)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + WORKER_2_SECRET))
+                .andExpect(status().isNoContent());
+        JsonNode lease = claimNext(WORKER_1, WORKER_1_SECRET);
+        assertThat(lease.path("stage").path("commitSha").asText()).isEqualTo(sha);
+        String attempt = lease.path("attemptId").asText();
+        String proof = """
+                {"leaseToken":"%s","fencingGeneration":%d}
+                """.formatted(lease.path("leaseToken").asText(), lease.path("fencingGeneration").asLong());
+        String path = "/api/internal/workers/" + WORKER_1 + "/attempts/" + attempt;
+
+        mockMvc.perform(post(path + "/running")
+                        .header("X-CloudForge-Worker-Id", WORKER_1)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + WORKER_1_SECRET)
+                        .contentType(MediaType.APPLICATION_JSON).content(proof))
+                .andExpect(status().isOk());
+        completeAttempt(WORKER_1, WORKER_1_SECRET, UUID.fromString(attempt),
+                UUID.fromString(run.path("id").asText()),
+                UUID.fromString(lease.path("stage").path("stageRunId").asText()),
+                lease.path("stage").path("attemptNumber").asInt(), lease.path("leaseToken").asText(),
+                lease.path("fencingGeneration").asLong(), "SUCCEEDED", "NONE", 0, "Missing archive", true)
+                .andExpect(status().isConflict());
+        mockMvc.perform(post(path + "/source-archive")
+                        .header("X-CloudForge-Worker-Id", WORKER_1)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + WORKER_1_SECRET)
+                        .contentType(MediaType.APPLICATION_JSON).content(proof))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(path + "/source-archive").secure(true)
+                        .header("X-CloudForge-Worker-Id", WORKER_1)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + WORKER_1_SECRET)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(proof.replace(lease.path("leaseToken").asText(), "stale-lease")))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post(path + "/source-archive").secure(true)
+                        .header("X-CloudForge-Worker-Id", WORKER_1)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + WORKER_1_SECRET)
+                        .contentType(MediaType.APPLICATION_JSON).content(proof))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.downloadUrl").value(
+                        "https://codeload.github.com/source-owner/fixture/legacy.zip/" + sha + "?token=fixture"));
+        mockMvc.perform(post(path + "/source-archive").secure(true)
+                        .header("X-CloudForge-Worker-Id", WORKER_1)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + WORKER_1_SECRET)
+                        .contentType(MediaType.APPLICATION_JSON).content(proof))
+                .andExpect(status().isConflict());
+
+        org.mockito.Mockito.verify(githubSource).resolveCommit(identity, "refs/heads/main");
+        org.mockito.Mockito.verify(githubSource).requestArchive(identity, sha);
+        verifyNoMoreInteractions(githubSource);
     }
 
     @Test

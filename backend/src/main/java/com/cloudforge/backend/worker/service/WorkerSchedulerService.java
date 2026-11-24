@@ -13,12 +13,14 @@ import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepositor
 import com.cloudforge.backend.secrets.entity.PipelineRunSecretReferenceEntity;
 import com.cloudforge.backend.secrets.repository.PipelineRunSecretReferenceRepository;
 import com.cloudforge.backend.service.AuditService;
+import com.cloudforge.backend.source.ProjectSourceService;
 import com.cloudforge.backend.worker.config.WorkerProperties;
 import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
 import com.cloudforge.backend.worker.entity.AttemptFailureCategory;
 import com.cloudforge.backend.worker.entity.AttemptStatus;
 import com.cloudforge.backend.worker.entity.StageExecutionAttemptEntity;
 import com.cloudforge.backend.worker.entity.WorkerNodeEntity;
+import com.cloudforge.backend.worker.entity.WorkerAdapterType;
 import com.cloudforge.backend.worker.entity.WorkerStatus;
 import com.cloudforge.backend.worker.repository.StageExecutionAttemptRepository;
 import com.cloudforge.backend.worker.repository.WorkerNodeRepository;
@@ -61,6 +63,7 @@ public class WorkerSchedulerService {
     private final WorkerRegistryService workerRegistryService;
     private final PipelineRunSecretReferenceRepository secretReferenceRepository;
     private final AuditService auditService;
+    private final ProjectSourceService sourceService;
     private final ObjectMapper objectMapper;
 
     public WorkerSchedulerService(
@@ -73,6 +76,7 @@ public class WorkerSchedulerService {
             WorkerRegistryService workerRegistryService,
             PipelineRunSecretReferenceRepository secretReferenceRepository,
             AuditService auditService,
+            ProjectSourceService sourceService,
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
@@ -84,6 +88,7 @@ public class WorkerSchedulerService {
         this.workerRegistryService = workerRegistryService;
         this.secretReferenceRepository = secretReferenceRepository;
         this.auditService = auditService;
+        this.sourceService = sourceService;
         this.objectMapper = objectMapper;
     }
 
@@ -126,6 +131,9 @@ public class WorkerSchedulerService {
         List<String> supportedOperations = workerRegistryService.readOperationsList(worker.getSupportedOperationsJson())
                 .stream()
                 .filter(op -> AllowedWorkerOperation.parseStrict(op).isPresent())
+                .filter(op -> !AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE.name().equals(op)
+                        || (worker.getAdapterType() == WorkerAdapterType.GITHUB_SOURCE
+                        && sourceService.permitsWorker(worker.getWorkerId())))
                 .toList();
         if (supportedOperations.isEmpty()) {
             return Optional.empty();

@@ -112,6 +112,7 @@ const ALLOWLISTED_OPS_BY_STAGE_TYPE: Partial<
   Record<PipelineStageType, Array<{ value: AllowedWorkerOperation; label: string }>>
 > = {
   SOURCE_PREP: [
+    { value: 'GITHUB_SOURCE_ACQUIRE', label: 'GitHub source acquisition (Dedicated worker)' },
     { value: 'ENV_VALIDATION', label: 'ENV_VALIDATION (Container sandbox check)' },
     { value: 'WORKER_DIAGNOSTICS', label: 'WORKER_DIAGNOSTICS (Resource & isolation probe)' },
   ],
@@ -587,6 +588,12 @@ export function CloudForgePipelinesPanel() {
   const handleQueueRunSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!activeWorkspace || !queueingDef || isQueueingRun) return;
+
+    const acquiresSource = queueingDef.stages.some((stage) => stage.metadata.operation === 'GITHUB_SOURCE_ACQUIRE');
+    if (acquiresSource && runSha.trim() && !/^[a-f0-9]{40}$/i.test(runSha.trim())) {
+      setQueueRunError('Enter a full 40-character commit SHA or leave it blank to resolve the selected ref.');
+      return;
+    }
 
     setIsQueueingRun(true);
     setQueueRunError(null);
@@ -1608,7 +1615,7 @@ export function CloudForgePipelinesPanel() {
                         htmlFor={`stage-op-${stage.localId}`}
                         className="cf-field__label"
                       >
-                        Allowlisted Worker Operation (Phase 3.3)
+                        Allowlisted Worker Operation
                       </label>
                       {(ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 ? (
                         <select
@@ -1619,7 +1626,9 @@ export function CloudForgePipelinesPanel() {
                             updateStageRow(stage.localId, (row) => ({
                               ...row,
                               allowedOperation: e.target.value,
-                              secretBindings: e.target.value ? row.secretBindings : [],
+                              secretBindings: e.target.value && e.target.value !== 'GITHUB_SOURCE_ACQUIRE'
+                                ? row.secretBindings
+                                : [],
                             }))
                           }
                         >
@@ -1645,6 +1654,7 @@ export function CloudForgePipelinesPanel() {
                         </span>
                         {(ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 &&
                           stage.allowedOperation &&
+                          stage.allowedOperation !== 'GITHUB_SOURCE_ACQUIRE' &&
                           formTargetEnvId &&
                           availableSecrets.length > 0 && (
                             <button
@@ -1677,10 +1687,11 @@ export function CloudForgePipelinesPanel() {
 
                       {!(
                         (ALLOWLISTED_OPS_BY_STAGE_TYPE[stage.stageType]?.length ?? 0) > 0 &&
-                        stage.allowedOperation
+                        stage.allowedOperation &&
+                        stage.allowedOperation !== 'GITHUB_SOURCE_ACQUIRE'
                       ) ? (
                         <div className="cf-stage-capability-note">
-                          Secret injection is blocked for declarative, build, scan, package, or deployment stages.
+                          This stage does not accept secret bindings.
                         </div>
                       ) : !formTargetEnvId ? (
                         <div className="cf-stage-capability-note">
@@ -1864,13 +1875,13 @@ export function CloudForgePipelinesPanel() {
 
             <div className="cf-field">
               <label htmlFor="cf-run-branch" className="cf-field__label">
-                Target Branch (Optional)
+                Target Branch or GitHub Tag (Optional)
               </label>
               <input
                 id="cf-run-branch"
                 type="text"
                 className="cf-input mono"
-                placeholder="Defaults to project default branch"
+                placeholder="Project default branch or refs/tags/<tag>"
                 value={runBranch}
                 onChange={(e) => setRunBranch(e.target.value)}
               />
@@ -1884,7 +1895,9 @@ export function CloudForgePipelinesPanel() {
                 id="cf-run-sha"
                 type="text"
                 className="cf-input mono"
-                placeholder="7-40 hex characters (optional)"
+                placeholder={queueingDef.stages.some((stage) => stage.metadata.operation === 'GITHUB_SOURCE_ACQUIRE')
+                  ? 'Full commit SHA or resolve automatically'
+                  : '7-40 hex characters (optional)'}
                 value={runSha}
                 onChange={(e) => setRunSha(e.target.value)}
               />

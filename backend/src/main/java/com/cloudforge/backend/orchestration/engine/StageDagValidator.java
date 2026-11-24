@@ -288,7 +288,7 @@ public class StageDagValidator {
                 var parsedOp = AllowedWorkerOperation.parseStrict(rawValue);
                 if (parsedOp.isEmpty()) {
                     fieldErrors.put(prefix + ".metadata." + key,
-                            "Unsupported operation \"" + rawValue + "\". Allowed Phase 3.3 operations: ENV_VALIDATION, CONTROLLED_SMOKE_TEST, WORKER_DIAGNOSTICS");
+                            "Unsupported operation \"" + rawValue + "\". Select an operation supported by the stage type.");
                     continue;
                 }
                 if (stageType != null && !parsedOp.get().supportsStageType(stageType)) {

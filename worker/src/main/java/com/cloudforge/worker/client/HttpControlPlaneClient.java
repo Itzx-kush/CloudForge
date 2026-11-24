@@ -114,6 +114,26 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
     }
 
     @Override
+    public URI fetchSourceArchive(String workerId, UUID attemptId, String leaseToken, long fencingGeneration) {
+        if (!config.sourceOnly()) {
+            throw new IllegalStateException("GitHub source acquisition is disabled");
+        }
+        ArchiveGrant grant = postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/source-archive",
+                Map.of("leaseToken", leaseToken, "fencingGeneration", fencingGeneration),
+                ArchiveGrant.class
+        );
+        return grant == null ? null : grant.downloadUrl();
+    }
+
+    private record ArchiveGrant(URI downloadUrl) {
+        @Override
+        public String toString() {
+            return "ArchiveGrant[downloadUrl=REDACTED]";
+        }
+    }
+
+    @Override
     public void appendLogs(
             String workerId,
             UUID attemptId,
@@ -164,7 +184,7 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
                 }
                 return objectMapper.readValue(response.body(), responseType);
             }
-            String safeBody = path.endsWith("/secrets") ? "[REDACTED]" : response.body();
+            String safeBody = isSensitiveResponse(path) ? "[REDACTED]" : response.body();
             throw new IllegalStateException(
                     "Control-plane request POST " + path + " failed with HTTP "
                             + response.statusCode() + ": " + safeBody
@@ -172,8 +192,15 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
         } catch (IllegalStateException ex) {
             throw ex;
         } catch (Exception ex) {
+            if (isSensitiveResponse(path)) {
+                throw new IllegalStateException("Sensitive control-plane request failed");
+            }
             throw new IllegalStateException("Control-plane request POST " + path + " error: " + ex.getMessage(), ex);
         }
+    }
+
+    private static boolean isSensitiveResponse(String path) {
+        return path.endsWith("/secrets") || path.endsWith("/source-archive");
     }
 
     private HttpRequest authorizedPost(String path, String jsonBody) {

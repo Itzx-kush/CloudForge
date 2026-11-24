@@ -438,7 +438,7 @@ public class PipelineDefinitionService {
             Optional<AllowedWorkerOperation> operation = AllowedWorkerOperation.resolveForStage(
                     stageSpec.stageType(), stageSpec.metadata()
             );
-            if (operation.isEmpty()) {
+            if (operation.isEmpty() || operation.get() == AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE) {
                 throw new BadRequestException(
                         "Stage \"" + stageSpec.stageKey() + "\" (" + stageSpec.stageType()
                                 + ") cannot bind encrypted secrets without an approved Phase 3.4 worker operation"
