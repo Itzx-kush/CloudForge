@@ -408,9 +408,11 @@ export function PipelinesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspace?.id]);
 
+  const hasOverview = overview !== null;
+
   // Reload stored workflows & runs whenever selection/filters/pagination change
   useEffect(() => {
-    if (isInitialLoading || !activeWorkspace) return;
+    if (isInitialLoading || !activeWorkspace || !hasOverview) return;
     let active = true;
     setIsRefreshingLocal(true);
 
@@ -425,6 +427,7 @@ export function PipelinesPage() {
     };
   }, [
     activeWorkspace,
+    hasOverview,
     isInitialLoading,
     loadStoredPipelineData,
   ]);
