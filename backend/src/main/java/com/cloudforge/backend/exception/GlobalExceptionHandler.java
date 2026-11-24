@@ -3,6 +3,7 @@ package com.cloudforge.backend.exception;
 import com.cloudforge.backend.config.RequestCorrelationFilter;
 import com.cloudforge.backend.dto.ApiErrorResponse;
 import com.cloudforge.backend.github.GitHubRateLimitException;
+import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
@@ -161,6 +163,22 @@ public class GlobalExceptionHandler {
         return buildResponse(
                 HttpStatus.METHOD_NOT_ALLOWED,
                 "HTTP method " + ex.getMethod() + " is not supported for this endpoint",
+                request.getRequestURI(),
+                Map.of()
+        );
+    }
+
+    @ExceptionHandler({
+            ObjectOptimisticLockingFailureException.class,
+            OptimisticLockException.class
+    })
+    public ResponseEntity<ApiErrorResponse> handleOptimisticLockConflict(
+            Exception ex,
+            HttpServletRequest request
+    ) {
+        return buildResponse(
+                HttpStatus.CONFLICT,
+                "Concurrent modification detected. Reload the latest resource state and retry.",
                 request.getRequestURI(),
                 Map.of()
         );

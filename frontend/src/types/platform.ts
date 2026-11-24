@@ -329,3 +329,161 @@ export interface GitHubActionsSyncResponse {
   syncedAt: string;
   message: string;
 }
+
+// --- Phase 3.2: CloudForge Pipeline Orchestration Engine ---
+
+export type PipelineStageType =
+  | 'SOURCE_PREP'
+  | 'BUILD'
+  | 'TEST'
+  | 'SECURITY_SCAN'
+  | 'CONTAINER_PACKAGE'
+  | 'DEPLOYMENT';
+
+export type PipelineRunStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'CANCELLED';
+
+export type PipelineStageStatus =
+  | 'PENDING'
+  | 'READY'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'SKIPPED'
+  | 'CANCELLED';
+
+export type PipelineTriggerType = 'MANUAL' | 'API' | 'SCHEDULE' | 'WEBHOOK';
+
+export interface StageDefinitionInput {
+  stageKey: string;
+  displayName: string;
+  stageType: PipelineStageType;
+  dependsOn: string[];
+  timeoutSeconds?: number;
+  maxRetries?: number;
+  allowFailure?: boolean;
+  metadata?: Record<string, string>;
+}
+
+export interface CreatePipelineDefinitionInput {
+  projectId: string;
+  name: string;
+  description?: string;
+  linkedRepositoryId?: string | null;
+  enabled?: boolean;
+  stages: StageDefinitionInput[];
+}
+
+export interface UpdatePipelineDefinitionInput {
+  name: string;
+  description?: string;
+  linkedRepositoryId?: string | null;
+  enabled?: boolean;
+  expectedRowVersion?: number | null;
+  stages: StageDefinitionInput[];
+}
+
+export interface PipelineStageDefinition {
+  id: string;
+  stageKey: string;
+  displayName: string;
+  stageType: PipelineStageType;
+  executionOrder: number;
+  dependsOn: string[];
+  timeoutSeconds: number;
+  maxRetries: number;
+  allowFailure: boolean;
+  metadata: Record<string, string>;
+}
+
+export interface PipelineDefinition {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  linkedRepositoryId: string | null;
+  repositoryFullName: string | null;
+  name: string;
+  slug: string;
+  description: string | null;
+  enabled: boolean;
+  definitionVersion: number;
+  rowVersion: number | null;
+  createdByUsername: string | null;
+  updatedByUsername: string | null;
+  stages: PipelineStageDefinition[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePipelineRunInput {
+  definitionId: string;
+  targetBranch?: string | null;
+  commitSha?: string | null;
+  triggerType?: PipelineTriggerType;
+  idempotencyKey?: string | null;
+}
+
+export interface PipelineStageRun {
+  id: string;
+  stageKey: string;
+  displayName: string;
+  stageType: PipelineStageType;
+  executionOrder: number;
+  dependsOn: string[];
+  timeoutSeconds: number;
+  maxRetries: number;
+  attemptNumber: number;
+  allowFailure: boolean;
+  status: PipelineStageStatus;
+  statusReason: string | null;
+  readyAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface PipelineRun {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  definitionId: string | null;
+  definitionName: string;
+  definitionVersion: number;
+  linkedRepositoryId: string | null;
+  repositoryFullName: string | null;
+  runNumber: number;
+  triggerType: PipelineTriggerType;
+  targetBranch: string | null;
+  commitSha: string | null;
+  status: PipelineRunStatus;
+  statusReason: string | null;
+  requestedByUsername: string | null;
+  cancelledByUsername: string | null;
+  queuedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  rowVersion: number | null;
+  stages: PipelineStageRun[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PipelineRunEvent {
+  id: string;
+  pipelineRunId: string;
+  stageRunId: string | null;
+  stageKey: string | null;
+  eventType: string;
+  fromStatus: string | null;
+  toStatus: string;
+  actorUsername: string | null;
+  message: string;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+}

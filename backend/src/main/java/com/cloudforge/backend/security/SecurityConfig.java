@@ -119,8 +119,8 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(appProperties.getCors().getAllowedOrigins());
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Content-Type", "Accept", "X-Request-Id", "X-XSRF-TOKEN"));
-        configuration.setExposedHeaders(List.of("X-Request-Id"));
+        configuration.setAllowedHeaders(List.of("Content-Type", "Accept", "X-Request-Id", "X-XSRF-TOKEN", "Idempotency-Key"));
+        configuration.setExposedHeaders(List.of("X-Request-Id", "X-Idempotent-Replay"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 

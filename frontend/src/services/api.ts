@@ -4,6 +4,8 @@ import type {
   AuditEvent,
   AuthConfig,
   AuthMePayload,
+  CreatePipelineDefinitionInput,
+  CreatePipelineRunInput,
   CreateProjectInput,
   GitHubActionsSyncResponse,
   GitHubInstallUrlResponse,
@@ -13,13 +15,18 @@ import type {
   GitHubWorkflowRun,
   LinkedRepository,
   PagedResponse,
+  PipelineDefinition,
   PipelineOverview,
+  PipelineRun,
+  PipelineRunEvent,
+  PipelineRunStatus,
   ProjectDetail,
   ProjectEnvironment,
   ProjectStatus,
   ProjectSummary,
   RepositoryConnectionStatus,
   UpdateEnvironmentInput,
+  UpdatePipelineDefinitionInput,
   UpdateProjectInput,
   WorkflowRunJobsResponse,
   WorkflowRunNormalizedStatus,
@@ -96,12 +103,14 @@ async function apiRequest<T>(
   options: {
     method?: string;
     body?: unknown;
+    headers?: Record<string, string>;
     signal?: AbortSignal;
   } = {}
 ): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase();
   const headers: Record<string, string> = {
     Accept: 'application/json',
+    ...(options.headers ?? {}),
   };
 
   if (options.body !== undefined) {
@@ -547,6 +556,123 @@ export function syncRepositoryWorkflows(
   return apiRequest<GitHubActionsSyncResponse>(
     `/api/workspaces/${workspaceId}/repositories/${repositoryId}/workflows/sync`,
     { method: 'POST' }
+  );
+}
+
+// --- Phase 3.2: CloudForge Pipeline Orchestration API ---
+
+export function fetchPipelineDefinitions(
+  workspaceId: string,
+  params: { projectId?: string; enabled?: boolean | ''; q?: string; page?: number; size?: number } = {}
+): Promise<PagedResponse<PipelineDefinition>> {
+  const search = new URLSearchParams();
+  if (params.projectId) search.set('projectId', params.projectId);
+  if (params.enabled !== undefined && params.enabled !== '') {
+    search.set('enabled', String(params.enabled));
+  }
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<PipelineDefinition>>(
+    `/api/workspaces/${workspaceId}/pipelines/definitions${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function fetchPipelineDefinition(
+  workspaceId: string,
+  definitionId: string
+): Promise<PipelineDefinition> {
+  return apiRequest<PipelineDefinition>(
+    `/api/workspaces/${workspaceId}/pipelines/definitions/${definitionId}`
+  );
+}
+
+export function createPipelineDefinition(
+  workspaceId: string,
+  input: CreatePipelineDefinitionInput
+): Promise<PipelineDefinition> {
+  return apiRequest<PipelineDefinition>(
+    `/api/workspaces/${workspaceId}/pipelines/definitions`,
+    { method: 'POST', body: input }
+  );
+}
+
+export function updatePipelineDefinition(
+  workspaceId: string,
+  definitionId: string,
+  input: UpdatePipelineDefinitionInput
+): Promise<PipelineDefinition> {
+  return apiRequest<PipelineDefinition>(
+    `/api/workspaces/${workspaceId}/pipelines/definitions/${definitionId}`,
+    { method: 'PUT', body: input }
+  );
+}
+
+export function fetchPipelineRuns(
+  workspaceId: string,
+  params: {
+    projectId?: string;
+    definitionId?: string;
+    status?: PipelineRunStatus | '';
+    q?: string;
+    page?: number;
+    size?: number;
+  } = {}
+): Promise<PagedResponse<PipelineRun>> {
+  const search = new URLSearchParams();
+  if (params.projectId) search.set('projectId', params.projectId);
+  if (params.definitionId) search.set('definitionId', params.definitionId);
+  if (params.status) search.set('status', params.status);
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<PipelineRun>>(
+    `/api/workspaces/${workspaceId}/pipelines/runs${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function fetchPipelineRun(workspaceId: string, runId: string): Promise<PipelineRun> {
+  return apiRequest<PipelineRun>(`/api/workspaces/${workspaceId}/pipelines/runs/${runId}`);
+}
+
+export function createPipelineRun(
+  workspaceId: string,
+  input: CreatePipelineRunInput,
+  idempotencyKey?: string
+): Promise<PipelineRun> {
+  const headers: Record<string, string> = {};
+  if (idempotencyKey && idempotencyKey.trim()) {
+    headers['Idempotency-Key'] = idempotencyKey.trim();
+  }
+  return apiRequest<PipelineRun>(`/api/workspaces/${workspaceId}/pipelines/runs`, {
+    method: 'POST',
+    body: input,
+    headers,
+  });
+}
+
+export function cancelPipelineRun(
+  workspaceId: string,
+  runId: string,
+  reason?: string
+): Promise<PipelineRun> {
+  return apiRequest<PipelineRun>(
+    `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/cancel`,
+    {
+      method: 'POST',
+      body: reason && reason.trim() ? { reason: reason.trim() } : {},
+    }
+  );
+}
+
+export function fetchPipelineRunEvents(
+  workspaceId: string,
+  runId: string
+): Promise<PipelineRunEvent[]> {
+  return apiRequest<PipelineRunEvent[]>(
+    `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/events`
   );
 }
 

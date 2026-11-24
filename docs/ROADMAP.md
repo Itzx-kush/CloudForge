@@ -1,6 +1,6 @@
 # CloudForge Development Roadmap
 
-This roadmap clearly distinguishes **Implemented (Phases 1–2 & Phase 3.1)** functionality from **Planned (Phases 3.2–4)** capabilities.
+This roadmap clearly distinguishes **Implemented (Phases 1–2, Phase 3.1 & Phase 3.2)** functionality from **Planned (Phases 3.3–4)** capabilities.
 
 ---
 
@@ -45,10 +45,20 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2 & Phase 3.1)** fu
 
 ---
 
-## Phases 3.2–3.7 — Orchestration, Isolated Build Workers, Container Deployments & Kubernetes (**Planned**)
+## Phase 3.2 — Pipeline Orchestration Engine (**Implemented**)
 
-- [ ] **Phase 3.2 — Pipeline Orchestration Engine:** Persistent state machine, durable job queue, and controlled execution stages.
-- [ ] **Phase 3.3 — Isolated Container Build Workers:** Execute repository container builds strictly inside ephemeral, rootless workers with enforced CPU, memory, disk, timeout, and network egress limits (never on the control-plane host).
+- [x] **PostgreSQL Persistence (`V4__pipeline_orchestration_engine.sql`):** Non-destructive Flyway migration adding `pipeline_definitions`, `pipeline_stage_definitions`, `pipeline_runs`, `pipeline_stage_runs`, `pipeline_run_events`, and `pipeline_idempotency_keys` with UUID primary keys, optimistic locking (`row_version`), status/type check constraints, monotonic `(pipeline_definition_id, run_number)` uniqueness, and workspace-scoped indexes.
+- [x] **Declarative Pipeline Definitions & DAG Validator (`StageDagValidator`):** Project-scoped pipeline definitions (`SOURCE_PREP`, `BUILD`, `TEST`, `SECURITY_SCAN`, `CONTAINER_PACKAGE`, `DEPLOYMENT`), strict Kahn topological sort rejecting cycles, self-dependencies, missing predecessors, duplicate keys, oversized graphs (>25 stages / >10 dependencies), shell-command fields, and plaintext secret patterns.
+- [x] **Encapsulated State Machines & Dependency Evaluation (`PipelineStateMachine`, `StageStateMachine`, `StageDependencyEvaluator`):** Explicit transition enforcement preventing illegal or terminal-state mutations, immutable definition snapshots per run, deterministic root-stage `READY` promotion, transitive downstream failure/skip/cancel propagation, and `allowFailure` support.
+- [x] **Database-Backed Idempotency & Concurrency Control (`PipelineIdempotencyService`, `PipelineOrchestrationService`):** Restart-safe `Idempotency-Key` support (24-hour TTL, SHA-256 request fingerprinting, atomic `INSERT ... ON CONFLICT DO NOTHING`, `409 Conflict` on payload mismatch), optimistic locking (`@Version`), and pessimistic row locking (`SELECT ... FOR UPDATE`) for monotonic run numbering and race-safe cancellation.
+- [x] **Workspace-Isolated REST APIs (`PipelineOrchestrationController`):** Nine authenticated, workspace-scoped endpoints under `/api/workspaces/{workspaceId}/pipelines` for definition CRUD (`OWNER`), run queueing/cancellation (`OWNER`/`DEVELOPER` with CSRF), and run/event inspection (`OWNER`/`DEVELOPER`/`VIEWER`), plus an internal `WorkerAssignmentContract` reserved strictly for Phase 3.3 workers (no fake execution, no user-facing execution triggers).
+- [x] **Premium Frontend Integration (`CloudForgePipelinesPanel` inside `PipelinesPage`):** Dedicated **CloudForge Pipelines** tab cleanly separated from **GitHub Actions**, supporting definition creation/editing with accessible DAG dependency builder, `Idempotency-Key` run queueing, honest `Queued — Awaiting execution infrastructure` state presentation, run/stage/event history inspection, and confirmation-gated cancellation. See `docs/PHASE3_2_PIPELINE_ORCHESTRATION.md`.
+
+---
+
+## Phases 3.3–3.7 — Isolated Build Workers, Secrets, Container Deployments & Kubernetes (**Planned**)
+
+- [ ] **Phase 3.3 — Isolated Container Build Workers:** Execute repository container builds strictly inside ephemeral, rootless workers with enforced CPU, memory, disk, timeout, and network egress limits (never on the control-plane host), claiming `READY` stage tickets via `WorkerAssignmentContract`.
 - [ ] **Phase 3.4 — Encrypted Secret Storage:** Introduce KMS / External Secrets integration for project environment secrets (deferred from Phase 2).
 - [ ] **Phase 3.5 — Docker Image Deployment & OCI Registry:** Push immutable, content-addressed OCI digests to a configured container registry.
 - [ ] **Phase 3.6 — Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy projects to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.

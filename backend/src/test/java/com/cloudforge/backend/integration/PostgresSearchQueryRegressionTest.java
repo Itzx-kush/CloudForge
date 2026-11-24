@@ -11,6 +11,17 @@ import com.cloudforge.backend.entity.RepositoryConnectionStatus;
 import com.cloudforge.backend.entity.UserEntity;
 import com.cloudforge.backend.entity.WorkflowRunNormalizedStatus;
 import com.cloudforge.backend.entity.WorkspaceEntity;
+import com.cloudforge.backend.orchestration.dto.CancelPipelineRunRequest;
+import com.cloudforge.backend.orchestration.dto.CreatePipelineDefinitionRequest;
+import com.cloudforge.backend.orchestration.dto.CreatePipelineRunRequest;
+import com.cloudforge.backend.orchestration.dto.StageDefinitionRequest;
+import com.cloudforge.backend.orchestration.entity.PipelineRunStatus;
+import com.cloudforge.backend.orchestration.entity.PipelineStageType;
+import com.cloudforge.backend.orchestration.entity.PipelineTriggerType;
+import com.cloudforge.backend.orchestration.repository.PipelineDefinitionRepository;
+import com.cloudforge.backend.orchestration.repository.PipelineRunRepository;
+import com.cloudforge.backend.orchestration.service.PipelineDefinitionService;
+import com.cloudforge.backend.orchestration.service.PipelineOrchestrationService;
 import com.cloudforge.backend.repository.AuditEventRepository;
 import com.cloudforge.backend.repository.GitHubInstallationRepository;
 import com.cloudforge.backend.repository.GitHubWorkflowRepository;
@@ -111,11 +122,24 @@ class PostgresSearchQueryRegressionTest {
     @Autowired
     private WebhookDeliveryRepository webhookDeliveryRepository;
 
+    @Autowired
+    private PipelineDefinitionService pipelineDefinitionService;
+
+    @Autowired
+    private PipelineOrchestrationService pipelineOrchestrationService;
+
+    @Autowired
+    private PipelineDefinitionRepository pipelineDefinitionRepository;
+
+    @Autowired
+    private PipelineRunRepository pipelineRunRepository;
+
     private UserEntity ownerA;
     private UserEntity ownerB;
     private WorkspaceEntity workspaceA;
     private WorkspaceEntity workspaceB;
     private LinkedRepositoryEntity repoA1;
+    private ProjectEntity projectA1;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -162,7 +186,7 @@ class PostgresSearchQueryRegressionTest {
                 "private", "Other workspace repo", RepositoryConnectionStatus.CONNECTED
         );
 
-        saveProject(workspaceA, ownerA, repoA1, "Payments Core", "payments-core",
+        projectA1 = saveProject(workspaceA, ownerA, repoA1, "Payments Core", "payments-core",
                 "Core billing 100% SLA service", ProjectStatus.ACTIVE);
         saveProject(workspaceA, ownerA, null, "Analytics Worker", "analytics-worker",
                 null, ProjectStatus.PAUSED);
@@ -354,6 +378,68 @@ class PostgresSearchQueryRegressionTest {
         );
         assertThat(firstClaim).isEqualTo(1);
         assertThat(secondClaim).isEqualTo(0);
+    }
+
+    @Test
+    void phase32PipelineOrchestrationIdempotencySearchAndCancelWorkOnPostgreSql() throws Exception {
+        var def = pipelineDefinitionService.createDefinition(
+                workspaceA.getId(),
+                new CreatePipelineDefinitionRequest(
+                        projectA1.getId(),
+                        "PG 100% Verified Pipeline",
+                        "PostgreSQL 17 orchestration check",
+                        repoA1.getId(),
+                        true,
+                        java.util.List.of(
+                                new StageDefinitionRequest("source", "Source Prep", PipelineStageType.SOURCE_PREP, java.util.List.of(), 300, 0, false, Map.of()),
+                                new StageDefinitionRequest("build", "Build", PipelineStageType.BUILD, java.util.List.of("source"), 600, 1, false, Map.of())
+                        )
+                ),
+                ownerA
+        );
+
+        String idemKey = "pg-idem-" + java.util.UUID.randomUUID();
+        var run1 = pipelineOrchestrationService.createRun(
+                workspaceA.getId(),
+                new CreatePipelineRunRequest(def.id(), "main", "abcdef1234567", PipelineTriggerType.MANUAL, null),
+                idemKey,
+                ownerA
+        );
+        assertThat(run1.idempotentReplay()).isFalse();
+        assertThat(run1.run().status()).isEqualTo(PipelineRunStatus.QUEUED);
+
+        // Idempotent replay against real PostgreSQL ON CONFLICT DO NOTHING without aborting TX
+        var replay = pipelineOrchestrationService.createRun(
+                workspaceA.getId(),
+                new CreatePipelineRunRequest(def.id(), "main", "abcdef1234567", PipelineTriggerType.MANUAL, null),
+                idemKey,
+                ownerA
+        );
+        assertThat(replay.idempotentReplay()).isTrue();
+        assertThat(replay.run().id()).isEqualTo(run1.run().id());
+
+        // Criteria searches with null & literal % filters on PostgreSQL
+        assertThat(pipelineDefinitionRepository.searchByWorkspace(workspaceA.getId(), null, null, null, PageRequest.of(0, 10))
+                .getTotalElements()).isEqualTo(1);
+        assertThat(pipelineDefinitionRepository.searchByWorkspace(workspaceA.getId(), projectA1.getId(), true, "100%", PageRequest.of(0, 10))
+                .getTotalElements()).isEqualTo(1);
+        assertThat(pipelineRunRepository.searchByWorkspace(workspaceA.getId(), null, null, null, null, PageRequest.of(0, 10))
+                .getTotalElements()).isEqualTo(1);
+
+        // Cancel & duplicate cancel on PostgreSQL with pessimistic row lock
+        var cancelled = pipelineOrchestrationService.cancelRun(
+                workspaceA.getId(), run1.run().id(), new CancelPipelineRunRequest("PG test cancel"), ownerA
+        );
+        assertThat(cancelled.status()).isEqualTo(PipelineRunStatus.CANCELLED);
+        var cancelledAgain = pipelineOrchestrationService.cancelRun(
+                workspaceA.getId(), run1.run().id(), null, ownerA
+        );
+        assertThat(cancelledAgain.status()).isEqualTo(PipelineRunStatus.CANCELLED);
+
+        mockMvc.perform(get("/api/workspaces/{ws}/pipelines/runs/{runId}/events", workspaceA.getId(), run1.run().id())
+                        .with(authenticatedUser(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventType").value("RUN_QUEUED"));
     }
 
     private LinkedRepositoryEntity saveRepo(
