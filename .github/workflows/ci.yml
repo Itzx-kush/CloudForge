@@ -98,8 +98,10 @@ jobs:
           java-version: "17"
           cache: maven
 
-      - name: Pre-pull pinned minimal executor image (alpine:3.20)
-        run: docker pull alpine:3.20
+      - name: Pre-pull pinned minimal executor image (alpine:3.20) and local OCI test registry (registry:2)
+        run: |
+          docker pull alpine:3.20
+          docker pull registry:2
 
       - name: Run worker unit and real Docker isolated execution tests
         run: mvn -B test

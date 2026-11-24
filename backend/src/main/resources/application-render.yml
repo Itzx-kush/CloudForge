@@ -24,3 +24,7 @@ cloudforge:
   secrets:
     worker-delivery-enabled: false
     allow-insecure-local-delivery: false
+  oci:
+    enabled: false
+    allow-local-dev-registry: false
+    allow-insecure-local-credential-delivery: false

@@ -68,8 +68,44 @@ public interface WorkerAssignmentContract {
             int maxLogLines,
             int maxLogBytes,
             boolean hasSecretBindings,
-            List<String> secretAliases
+            List<String> secretAliases,
+            boolean sourceHandoffRequired
     ) {
+        public LeasedStageWork(
+                StageDispatchDescriptor stage,
+                UUID attemptId,
+                String workerId,
+                String leaseToken,
+                long fencingGeneration,
+                String allowedOperation,
+                boolean idempotentOperation,
+                Instant leaseStartedAt,
+                Instant leaseExpiresAt,
+                int heartbeatIntervalSeconds,
+                int maxLogLines,
+                int maxLogBytes,
+                boolean hasSecretBindings,
+                List<String> secretAliases
+        ) {
+            this(
+                    stage,
+                    attemptId,
+                    workerId,
+                    leaseToken,
+                    fencingGeneration,
+                    allowedOperation,
+                    idempotentOperation,
+                    leaseStartedAt,
+                    leaseExpiresAt,
+                    heartbeatIntervalSeconds,
+                    maxLogLines,
+                    maxLogBytes,
+                    hasSecretBindings,
+                    secretAliases,
+                    false
+            );
+        }
+
         public LeasedStageWork(
                 StageDispatchDescriptor stage,
                 UUID attemptId,
@@ -98,7 +134,8 @@ public interface WorkerAssignmentContract {
                     maxLogLines,
                     maxLogBytes,
                     false,
-                    List.of()
+                    List.of(),
+                    false
             );
         }
     }

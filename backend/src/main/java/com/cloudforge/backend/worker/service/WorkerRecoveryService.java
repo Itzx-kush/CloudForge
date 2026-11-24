@@ -1,5 +1,6 @@
 package com.cloudforge.backend.worker.service;
 
+import com.cloudforge.backend.oci.service.OciBuildLifecycleService;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEntity;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEventEntity;
 import com.cloudforge.backend.orchestration.entity.PipelineStageRunEntity;
@@ -48,6 +49,7 @@ public class WorkerRecoveryService {
     private final PipelineRunEventRepository runEventRepository;
     private final StageExecutionAttemptRepository attemptRepository;
     private final WorkerResultProcessorService resultProcessorService;
+    private final OciBuildLifecycleService ociBuildLifecycleService;
     private final ObjectMapper objectMapper;
 
     public WorkerRecoveryService(
@@ -58,6 +60,7 @@ public class WorkerRecoveryService {
             PipelineRunEventRepository runEventRepository,
             StageExecutionAttemptRepository attemptRepository,
             WorkerResultProcessorService resultProcessorService,
+            OciBuildLifecycleService ociBuildLifecycleService,
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
@@ -67,6 +70,7 @@ public class WorkerRecoveryService {
         this.runEventRepository = runEventRepository;
         this.attemptRepository = attemptRepository;
         this.resultProcessorService = resultProcessorService;
+        this.ociBuildLifecycleService = ociBuildLifecycleService;
         this.objectMapper = objectMapper;
     }
 
@@ -160,6 +164,11 @@ public class WorkerRecoveryService {
 
         boolean cancelRequested = run.getCancellationRequestedAt() != null
                 || stage.getCancellationRequestedAt() != null;
+        ociBuildLifecycleService.reconcileAbortedAttempt(
+                attempt,
+                "Worker lease expired without heartbeat renewal; attempt fenced by recovery service",
+                cancelRequested
+        );
 
         if (cancelRequested) {
             stage.fenceExpiredLease();

@@ -23,6 +23,18 @@ public enum AllowedWorkerOperation {
             true,
             "Downloads and verifies a bounded GitHub archive for the pinned commit"
     ),
+    OCI_IMAGE_BUILD(
+            "OCI BuildKit Image Build",
+            EnumSet.of(PipelineStageType.BUILD),
+            true,
+            "Builds a reproducible OCI container image layout via bounded BuildKit from verified source"
+    ),
+    OCI_IMAGE_PUBLISH(
+            "OCI Registry Image Publish",
+            EnumSet.of(PipelineStageType.CONTAINER_PACKAGE),
+            false,
+            "Publishes a built OCI image layout to an approved registry and verifies its immutable SHA-256 digest"
+    ),
     ENV_VALIDATION(
             "Environment Validation",
             EnumSet.of(PipelineStageType.SOURCE_PREP),
@@ -81,6 +93,10 @@ public enum AllowedWorkerOperation {
         return stageType != null && compatibleStageTypes.contains(stageType);
     }
 
+    public boolean isOciOperation() {
+        return this == OCI_IMAGE_BUILD || this == OCI_IMAGE_PUBLISH;
+    }
+
     public static Optional<AllowedWorkerOperation> parseStrict(String raw) {
         if (raw == null || raw.isBlank()) {
             return Optional.empty();
@@ -123,11 +139,11 @@ public enum AllowedWorkerOperation {
             case SOURCE_PREP, TEST ->
                     "Declarative stage only — select an allowlisted Phase 3.3 operation (ENV_VALIDATION, CONTROLLED_SMOKE_TEST, WORKER_DIAGNOSTICS, or GITHUB_SOURCE_ACQUIRE) to enable isolated worker execution.";
             case BUILD ->
-                    "Unsupported in Phase 3.3 — arbitrary repository container builds require hardened sandbox isolation and remain planned.";
+                    "Declarative stage only (unsupported in Phase 3.3 default workers) — select OCI_IMAGE_BUILD with an approved OCI_BUILDKIT worker and registry connection.";
             case SECURITY_SCAN ->
                     "Unsupported in Phase 3.3 — automated security scanning is planned for Phase 4 DevSecOps policy gates.";
             case CONTAINER_PACKAGE ->
-                    "Unsupported in Phase 3.3 — OCI image packaging and registry publishing are planned for Phase 3.5.";
+                    "Declarative stage only — select OCI_IMAGE_PUBLISH (Phase 3.5 OCI BuildKit worker) with an approved registry connection to publish and verify immutable digests.";
             case DEPLOYMENT ->
                     "Unsupported in Phase 3.3 — Kubernetes workload deployment is planned for Phase 3.6.";
         };

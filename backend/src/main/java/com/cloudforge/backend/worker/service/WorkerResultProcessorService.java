@@ -4,6 +4,8 @@ import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.exception.ConflictException;
 import com.cloudforge.backend.exception.ForbiddenOperationException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.oci.service.OciBuildLifecycleService;
+import com.cloudforge.backend.oci.service.SourceHandoffService;
 import com.cloudforge.backend.orchestration.engine.StageDependencyEvaluator;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEntity;
 import com.cloudforge.backend.orchestration.entity.PipelineRunEventEntity;
@@ -61,6 +63,8 @@ public class WorkerResultProcessorService {
     private final AuditService auditService;
     private final LogSanitizer logSanitizer;
     private final AttemptSecretRedactionService attemptSecretRedactionService;
+    private final OciBuildLifecycleService ociBuildLifecycleService;
+    private final SourceHandoffService sourceHandoffService;
     private final ObjectMapper objectMapper;
 
     public WorkerResultProcessorService(
@@ -74,6 +78,8 @@ public class WorkerResultProcessorService {
             AuditService auditService,
             LogSanitizer logSanitizer,
             AttemptSecretRedactionService attemptSecretRedactionService,
+            OciBuildLifecycleService ociBuildLifecycleService,
+            SourceHandoffService sourceHandoffService,
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
@@ -86,6 +92,8 @@ public class WorkerResultProcessorService {
         this.auditService = auditService;
         this.logSanitizer = logSanitizer;
         this.attemptSecretRedactionService = attemptSecretRedactionService;
+        this.ociBuildLifecycleService = ociBuildLifecycleService;
+        this.sourceHandoffService = sourceHandoffService;
         this.objectMapper = objectMapper;
     }
 
@@ -182,6 +190,18 @@ public class WorkerResultProcessorService {
                 && AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE.name().equals(attempt.getAllowedOperation())
                 && attempt.getSourceArchiveIssuedAt() == null) {
             throw new ConflictException("Source acquisition cannot succeed before an archive grant is issued");
+        }
+        AllowedWorkerOperation parsedOp = AllowedWorkerOperation.parseStrict(attempt.getAllowedOperation()).orElse(null);
+        if (parsedOp != null && parsedOp.isOciOperation()) {
+            if (reportedStatus == AttemptStatus.SUCCEEDED) {
+                ociBuildLifecycleService.verifyCompletionPreconditions(attempt);
+            } else {
+                ociBuildLifecycleService.reconcileAbortedAttempt(
+                        attempt,
+                        StringUtils.hasText(request.summary()) ? request.summary().trim() : "OCI stage ended with " + reportedStatus,
+                        reportedStatus == AttemptStatus.CANCELLED
+                );
+            }
         }
 
         List<String> attemptSecrets = attemptSecretRedactionService.resolveSecretsForAttemptRedaction(attempt);
@@ -474,6 +494,7 @@ public class WorkerResultProcessorService {
             };
             PipelineRunStatus prevRun = run.transitionStatus(outcome, now, finalReason, run.getCancelledBy());
             runRepository.save(run);
+            sourceHandoffService.cleanupForRun(run.getId());
 
             recordEvent(
                     run,

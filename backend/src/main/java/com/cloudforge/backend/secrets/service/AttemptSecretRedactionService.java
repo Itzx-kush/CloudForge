@@ -1,5 +1,6 @@
 package com.cloudforge.backend.secrets.service;
 
+import com.cloudforge.backend.oci.service.RegistryCredentialResolver;
 import com.cloudforge.backend.secrets.crypto.SecretCryptoException;
 import com.cloudforge.backend.secrets.crypto.SecretKeyProvider;
 import com.cloudforge.backend.secrets.crypto.SecretManagementUnavailableException;
@@ -25,15 +26,18 @@ public class AttemptSecretRedactionService {
     private final SecretKeyProvider keyProvider;
     private final SecretManagementService secretManagementService;
     private final PipelineRunSecretReferenceRepository secretReferenceRepository;
+    private final RegistryCredentialResolver registryCredentialResolver;
 
     public AttemptSecretRedactionService(
             SecretKeyProvider keyProvider,
             SecretManagementService secretManagementService,
-            PipelineRunSecretReferenceRepository secretReferenceRepository
+            PipelineRunSecretReferenceRepository secretReferenceRepository,
+            RegistryCredentialResolver registryCredentialResolver
     ) {
         this.keyProvider = keyProvider;
         this.secretManagementService = secretManagementService;
         this.secretReferenceRepository = secretReferenceRepository;
+        this.registryCredentialResolver = registryCredentialResolver;
     }
 
     @Transactional(readOnly = true)
@@ -41,8 +45,11 @@ public class AttemptSecretRedactionService {
         if (attempt == null || attempt.getStageRun() == null) {
             return List.of();
         }
+        List<String> values = new ArrayList<>();
         UUID stageRunId = attempt.getStageRun().getId();
-        return resolveSecretsForStageRedaction(stageRunId, attempt.getStageRun().isHasSecretBindings());
+        values.addAll(resolveSecretsForStageRedaction(stageRunId, attempt.getStageRun().isHasSecretBindings()));
+        values.addAll(registryCredentialResolver.resolveSecretsForPublishAttemptRedaction(attempt));
+        return values;
     }
 
     @Transactional(readOnly = true)

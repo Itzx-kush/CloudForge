@@ -14,12 +14,14 @@ import {
   History,
   Info,
   Layers,
+  PackageCheck,
   RefreshCw,
   ShieldAlert,
   Workflow,
   X,
 } from 'lucide-react';
 import { CloudForgePipelinesPanel } from '../components/CloudForgePipelinesPanel';
+import { OciArtifactsPanel } from '../components/OciArtifactsPanel';
 import { DashboardCard } from '../components/DashboardCard';
 import { DataTable, type TableColumn } from '../components/DataTable';
 import { ErrorState } from '../components/ErrorState';
@@ -194,14 +196,23 @@ export function PipelinesPage() {
   const canSyncFromGitHub = activeRole === 'OWNER' || activeRole === 'DEVELOPER';
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab =
-    searchParams.get('view') === 'orchestration' ? 'orchestration' : 'github-actions';
-  const [activeTab, setActiveTab] = useState<'github-actions' | 'orchestration'>(initialTab);
+  const initialView = searchParams.get('view');
+  const initialTab: 'github-actions' | 'orchestration' | 'artifacts' =
+    initialView === 'orchestration'
+      ? 'orchestration'
+      : initialView === 'artifacts'
+        ? 'artifacts'
+        : 'github-actions';
+  const [activeTab, setActiveTab] = useState<'github-actions' | 'orchestration' | 'artifacts'>(
+    initialTab
+  );
 
-  const handleTabChange = (nextTab: 'github-actions' | 'orchestration') => {
+  const handleTabChange = (nextTab: 'github-actions' | 'orchestration' | 'artifacts') => {
     setActiveTab(nextTab);
     if (nextTab === 'orchestration') {
       setSearchParams({ view: 'orchestration' }, { replace: true });
+    } else if (nextTab === 'artifacts') {
+      setSearchParams({ view: 'artifacts' }, { replace: true });
     } else {
       setSearchParams({}, { replace: true });
     }
@@ -872,13 +883,15 @@ export function PipelinesPage() {
       description="Inspect read-only GitHub Actions workflows alongside CloudForge's persistent pipeline definitions, stage DAGs, and orchestrated runs."
       phaseBadge={
         activeTab === 'orchestration'
-          ? { label: 'Phase 3.2 · Pipeline Orchestration', tone: 'info' }
-          : {
-              label: overview?.githubAppConfigured
-                ? 'Phase 3.1 · GitHub Actions Read-Only'
-                : 'GitHub App Setup Required',
-              tone: overview?.githubAppConfigured ? 'healthy' : 'degraded',
-            }
+          ? { label: 'Phase 3.2–3.5 · Pipeline Orchestration', tone: 'info' }
+          : activeTab === 'artifacts'
+            ? { label: 'Phase 3.5B · OCI Builds & Artifacts', tone: 'healthy' }
+            : {
+                label: overview?.githubAppConfigured
+                  ? 'Phase 3.1 · GitHub Actions Read-Only'
+                  : 'GitHub App Setup Required',
+                tone: overview?.githubAppConfigured ? 'healthy' : 'degraded',
+              }
       }
       actions={
         activeTab === 'github-actions' ? (
@@ -943,10 +956,23 @@ export function PipelinesPage() {
           <Workflow size={15} aria-hidden="true" />
           <span>CloudForge Pipelines</span>
         </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-oci-artifacts"
+          aria-selected={activeTab === 'artifacts'}
+          className={`cf-orch-tab ${activeTab === 'artifacts' ? 'cf-orch-tab--active' : ''}`}
+          onClick={() => handleTabChange('artifacts')}
+        >
+          <PackageCheck size={15} aria-hidden="true" />
+          <span>Builds &amp; Artifacts</span>
+        </button>
       </div>
 
       {activeTab === 'orchestration' ? (
         <CloudForgePipelinesPanel />
+      ) : activeTab === 'artifacts' ? (
+        <OciArtifactsPanel />
       ) : (
         <>
       {toast && (

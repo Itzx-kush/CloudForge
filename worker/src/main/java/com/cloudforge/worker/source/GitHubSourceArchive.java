@@ -1,6 +1,7 @@
 package com.cloudforge.worker.source;
 
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.apache.commons.compress.archivers.zip.ZipFile;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -15,10 +16,14 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -56,11 +61,136 @@ public final class GitHubSourceArchive {
             download(downloadUrl, archive, deadline, cancelled);
             return extract(archive, source, MAX_SOURCE_BYTES, MAX_ENTRIES, deadline, cancelled);
         } finally {
-            try (var files = Files.walk(temporary)) {
-                for (Path entry : files.sorted(Comparator.reverseOrder()).toList()) {
-                    Files.delete(entry);
+            deleteRecursivelyQuietly(temporary);
+        }
+    }
+
+    /**
+     * Downloads, validates, and extracts the pinned GitHub archive, then packages a canonical,
+     * deterministic, sanitized ZIP into {@code outputHandoffZip} with its SHA-256 content checksum
+     * before deleting all intermediate temporary files.
+     */
+    public static StagedBundle acquireAndPackage(
+            URI downloadUrl,
+            String repository,
+            String sha,
+            Path outputHandoffZip,
+            Instant deadline,
+            AtomicBoolean cancelled
+    ) throws IOException {
+        validateLocation(downloadUrl, repository, sha);
+        checkActive(deadline, cancelled);
+        Path temporary = Files.createTempDirectory("cloudforge-source-");
+        try {
+            Path archive = temporary.resolve("source.zip");
+            Path source = Files.createDirectory(temporary.resolve("source"));
+            download(downloadUrl, archive, deadline, cancelled);
+            Inspection inspection = extract(archive, source, MAX_SOURCE_BYTES, MAX_ENTRIES, deadline, cancelled);
+            String sha256 = packageCanonicalZip(source, outputHandoffZip, deadline, cancelled);
+            long bundleBytes = Files.size(outputHandoffZip);
+            return new StagedBundle(inspection.fileCount(), inspection.extractedBytes(), bundleBytes, sha256);
+        } finally {
+            deleteRecursivelyQuietly(temporary);
+        }
+    }
+
+    /**
+     * Extracts a verified, control-plane-mediated source handoff ZIP into {@code targetDir}
+     * after verifying its exact SHA-256 checksum and re-enforcing all Phase 3.5A extraction bounds.
+     */
+    public static Inspection extractVerifiedHandoff(
+            Path handoffZip,
+            String expectedSha256,
+            Path targetDir,
+            Instant deadline,
+            AtomicBoolean cancelled
+    ) throws IOException {
+        checkActive(deadline, cancelled);
+        String actualSha = sha256File(handoffZip);
+        if (expectedSha256 == null || !actualSha.equalsIgnoreCase(expectedSha256.trim())) {
+            throw new IOException("Source handoff checksum mismatch: expected " + expectedSha256 + " but got " + actualSha);
+        }
+        return extract(handoffZip, targetDir, MAX_SOURCE_BYTES, MAX_ENTRIES, deadline, cancelled);
+    }
+
+    public static String packageCanonicalZip(
+            Path extractedRoot,
+            Path outputZip,
+            Instant deadline,
+            AtomicBoolean cancelled
+    ) throws IOException {
+        List<Path> entries;
+        try (var walk = Files.walk(extractedRoot)) {
+            entries = walk
+                    .filter(p -> !p.equals(extractedRoot))
+                    .sorted(Comparator.comparing(p -> extractedRoot.relativize(p).toString().replace('\\', '/')))
+                    .toList();
+        }
+        try (OutputStream fos = Files.newOutputStream(outputZip, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+             ZipArchiveOutputStream zos = new ZipArchiveOutputStream(fos)) {
+            ZipArchiveEntry rootDir = new ZipArchiveEntry("src/");
+            rootDir.setTime(0L);
+            rootDir.setUnixMode(UNIX_DIRECTORY | 0755);
+            zos.putArchiveEntry(rootDir);
+            zos.closeArchiveEntry();
+
+            for (Path p : entries) {
+                checkActive(deadline, cancelled);
+                if (Files.isSymbolicLink(p)) {
+                    throw new IOException("Symbolic links are prohibited in canonical source handoff");
+                }
+                String rel = extractedRoot.relativize(p).toString().replace('\\', '/');
+                if (Files.isDirectory(p)) {
+                    ZipArchiveEntry dirEntry = new ZipArchiveEntry("src/" + rel + "/");
+                    dirEntry.setTime(0L);
+                    dirEntry.setUnixMode(UNIX_DIRECTORY | 0755);
+                    zos.putArchiveEntry(dirEntry);
+                    zos.closeArchiveEntry();
+                } else if (Files.isRegularFile(p)) {
+                    byte[] bytes = Files.readAllBytes(p);
+                    ZipArchiveEntry fileEntry = new ZipArchiveEntry("src/" + rel);
+                    fileEntry.setTime(0L);
+                    fileEntry.setSize(bytes.length);
+                    fileEntry.setUnixMode(UNIX_REGULAR | 0644);
+                    zos.putArchiveEntry(fileEntry);
+                    zos.write(bytes);
+                    zos.closeArchiveEntry();
                 }
             }
+            zos.finish();
+        }
+        if (Files.size(outputZip) > MAX_ARCHIVE_BYTES) {
+            Files.deleteIfExists(outputZip);
+            throw new IOException("Canonical source handoff ZIP exceeded 32 MiB limit");
+        }
+        return sha256File(outputZip);
+    }
+
+    public static String sha256File(Path file) throws IOException {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = Files.newInputStream(file)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    md.update(buf, 0, n);
+                }
+            }
+            return HexFormat.of().formatHex(md.digest());
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
+        }
+    }
+
+    public static void deleteRecursivelyQuietly(Path path) {
+        if (path == null || !Files.exists(path)) {
+            return;
+        }
+        try (var files = Files.walk(path)) {
+            for (Path entry : files.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(entry);
+            }
+        } catch (IOException ignored) {
         }
     }
 
@@ -259,6 +389,9 @@ public final class GitHubSourceArchive {
     }
 
     public record Inspection(int fileCount, long extractedBytes) {
+    }
+
+    public record StagedBundle(int fileCount, long extractedBytes, long archiveBytes, String sha256) {
     }
 
     public static final class SourceTimeoutException extends IOException {

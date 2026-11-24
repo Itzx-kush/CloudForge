@@ -1,6 +1,6 @@
 # CloudForge Architecture
 
-This document describes the **implemented Phase 1, Phase 2 & Phases 3.1–3.3 architecture** alongside the **planned target architecture** for Phases 3.4–4. Every section explicitly distinguishes what is live today from what is planned.
+This document describes the **implemented Phase 1, Phase 2 & Phases 3.1–3.5 architecture** alongside the **planned target architecture** for Phases 3.6–4. Every section explicitly distinguishes what is live today from what is planned.
 
 ---
 
@@ -14,7 +14,7 @@ This document describes the **implemented Phase 1, Phase 2 & Phases 3.1–3.3 ar
 
 ---
 
-## 2. Phases 1–3.3 Implemented Architecture
+## 2. Phases 1–3.5 Implemented Architecture
 
 ### 2.1 High-Level Component Diagram
 
@@ -81,6 +81,8 @@ CloudForge enforces strict separation between the **Control Plane** (`backend/`)
 | `orchestration` | Phase 3.2 modular pipeline orchestration subsystem (`controller`, `service`, `engine`, `entity`, `repository`, `dto`) managing persistent pipeline definitions, DAG validation, state machines, idempotency, concurrency control, cancellation, and `WorkerAssignmentContract`. |
 | `worker` | Phase 3.3 control-plane worker subsystem (`config`, `security`, `entity`, `repository`, `dto`, `service`, `controller`) handling trusted worker auth, registry, heartbeats, bounded scheduling, atomic fenced leasing, result processing, crash/lease recovery, and sanitized log persistence. |
 | `secrets` | Phase 3.4 encrypted secret management (`config`, `crypto`, `entity`, `repository`, `dto`, `security`, `service`, `controller`) providing AES-256-GCM envelope encryption, `EnvKeyringSecretKeyProvider`, write-only CRUD, operator DEK rewrapping, lease-bound worker delivery, cooldown-protected audit, and defense-in-depth redaction. |
+| `source` | Phase 3.5A immutable GitHub source acquisition coordination (`ProjectSourceService`, `WorkerSourceController`) pinning commits and issuing single-use HTTPS archive URLs to allowlisted `GITHUB_SOURCE` workers. |
+| `oci` | Phase 3.5B secure container builds, OCI registry connections, ephemeral verified handoffs, BuildKit lifecycle coordination, encrypted registry credential resolution, immutable digest verification, and artifact query APIs (`config`, `entity`, `repository`, `dto`, `service`, `controller`). |
 | `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubTokenScope`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`, typed metadata DTOs & integration exceptions). |
 | `security` | Spring Security filter chain, OAuth 2.0 user service, success/failure handlers, `CloudForgeUserPrincipal`, `RedirectOriginValidator`, SPA CSRF handler/filter, JSON 401/403 handlers. |
 | `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 11 core domain JPA entities + enums (including `GitHubWorkflowEntity`, `GitHubWorkflowRunEntity`, `WorkflowRunNormalizedStatus`). |
@@ -98,24 +100,26 @@ Located under `backend/src/main/resources/db/migration/`:
 - **`V4__pipeline_orchestration_engine.sql`:** `pipeline_definitions`, `pipeline_stage_definitions`, `pipeline_runs`, `pipeline_stage_runs`, `pipeline_run_events`, and `pipeline_idempotency_keys` storing workspace-scoped pipeline definitions, immutable run snapshots, DAG stage instances, chronological transition events, and restart-safe idempotency claims.
 - **`V5__isolated_worker_execution.sql`:** Extends `pipeline_runs` / `pipeline_stage_runs` with cancellation-intent, allowlisted operation, retry backoff, and fencing columns, and adds `worker_nodes`, `worker_credentials` (SHA-256 hashes only), `stage_execution_attempts`, and `stage_execution_logs`.
 - **`V6__encrypted_secret_management.sql`:** Extends pipeline definitions, stages, runs, and attempts with target-environment and secret-binding metadata, and creates `environment_secrets`, `environment_secret_versions`, `pipeline_run_secret_references`, and `secret_key_rotation_runs`.
+- **`V7__container_builds_oci_registry.sql`:** Extends `worker_nodes` with `GITHUB_SOURCE` adapter capability and adds `source_archive_issued_at` on `stage_execution_attempts`.
+- **`V8__oci_builds_and_registry_artifacts.sql`:** Extends `worker_nodes` (`OCI_BUILDKIT`) and `stage_execution_attempts` (6 OCI failure categories) and adds `oci_registry_connections`, `oci_source_handoffs`, `oci_build_records`, `oci_image_artifacts`, `oci_publish_attempts`, and `oci_artifact_events` (31 application tables total).
 
 ### 2.8 Frontend Architecture (`frontend/`)
 
 - **Framework:** React 19, TypeScript (strict mode), Vite, React Router 7, Obsidian-inspired theme & appearance system (`PreferenceProvider` supporting Dark/Light/System themes, 5 accent palettes, density, and reduced-motion).
 - **State & Auth:** `AuthContext` manages session verification (`/api/auth/me`, `/api/auth/config`), active workspace selection, role awareness, and CSRF-protected logout; `ProtectedRoute` guards authenticated views cleanly.
 - **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, custom per-request headers (such as `Idempotency-Key`), structured `ApiClientError` handling (including `Retry-After` rate-limit parsing), and preserved Phase 1 live `/api/health` probing.
-- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments + **Phase 3.4 write-only `EnvironmentSecretsPanel`**), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage` (tab-separated Phase 3.1 live GitHub Actions workflows/runs/jobs + Phase 3.2/3.3/3.4 `CloudForgePipelinesPanel` for declarative pipeline definitions, DAG stage builder, environment secret bindings, idempotent run queueing, lifecycle event inspection, worker telemetry, and cancellation)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
-- **Future-Phase Blueprint Pages:** `DeploymentsPage` (Phases 3.5–3.7) remains clearly labeled as a planned capability.
+- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments + **Phase 3.4 write-only `EnvironmentSecretsPanel`**), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage` (tab-separated Phase 3.1 live GitHub Actions workflows/runs/jobs + Phase 3.2–3.5 `CloudForgePipelinesPanel` for declarative pipeline definitions, DAG stage builder, OCI build/publish stage configuration, environment secret bindings, idempotent run queueing, lifecycle event inspection, worker telemetry, run-linked artifacts, and cancellation + Phase 3.5B `OciArtifactsPanel` for verified immutable OCI image artifacts, copyable digests, artifact detail inspection, OWNER registry connection management referencing encrypted secrets, and OCI build history)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
+- **Future-Phase Blueprint Pages:** `DeploymentsPage` (Phases 3.6–3.7) remains clearly labeled as a planned capability.
 
 ---
 
-## 3. Phase 3.5 source acquisition draft
+## 3. Phase 3.5 Container Builds, OCI Registry Publishing & Immutable Artifacts (Implemented — Trusted-Repository Mode)
 
-The control plane pins the selected GitHub ref and grants the dedicated worker access to an archive for that commit after verifying the worker's HTTPS request and active lease. The worker validates source files in temporary storage. See the [source acquisition runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md).
+Phase 3.5 splits immutable container production across three isolated, lease-fenced stages: `GITHUB_SOURCE` workers acquire and package pinned GitHub commits into checksum-verified ephemeral handoffs (`oci_source_handoffs`); `OCI_BUILDKIT` workers validate Dockerfiles (`DockerfilePolicyValidator`), execute bounded BuildKit builds (`--output type=oci`, `--network=none` default, zero registry credentials) and verify OCI layouts (`OciLayoutInspector`); a separate `OCI_IMAGE_PUBLISH` stage retrieves encrypted Phase 3.4 registry credentials strictly in memory over HTTPS, pushes via pure Java 17 OCI Distribution v1.1 (`OciRegistryClient`), independently verifies the pushed manifest SHA-256 digest, and persists immutable `oci_image_artifacts`. See [`docs/PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md`](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md).
 
-## 4. Planned Target Architecture (Phases 3.5–4)
+## 4. Planned Target Architecture (Phases 3.6–4)
 
-> **Status:** Deferred beyond Phase 3.4. Documented to guide incremental delivery.
+> **Status:** Deferred beyond Phase 3.5. Documented to guide incremental delivery.
 
 ```mermaid
 flowchart TB

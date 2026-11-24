@@ -9,6 +9,8 @@ import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.exception.ConflictException;
 import com.cloudforge.backend.exception.ForbiddenOperationException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.oci.service.BuildRequestValidator;
+import com.cloudforge.backend.oci.service.SourceHandoffService;
 import com.cloudforge.backend.orchestration.dto.CancelPipelineRunRequest;
 import com.cloudforge.backend.orchestration.dto.CreatePipelineRunRequest;
 import com.cloudforge.backend.orchestration.dto.PipelineRunDto;
@@ -99,6 +101,8 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
     private final SecretAuditService secretAuditService;
     private final AuditService auditService;
     private final ProjectSourceService sourceService;
+    private final BuildRequestValidator buildRequestValidator;
+    private final SourceHandoffService sourceHandoffService;
     private final ObjectMapper objectMapper;
 
     public PipelineOrchestrationService(
@@ -119,6 +123,8 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
             SecretAuditService secretAuditService,
             AuditService auditService,
             ProjectSourceService sourceService,
+            BuildRequestValidator buildRequestValidator,
+            SourceHandoffService sourceHandoffService,
             ObjectMapper objectMapper
     ) {
         this.authorizationService = authorizationService;
@@ -138,6 +144,8 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
         this.secretAuditService = secretAuditService;
         this.auditService = auditService;
         this.sourceService = sourceService;
+        this.buildRequestValidator = buildRequestValidator;
+        this.sourceHandoffService = sourceHandoffService;
         this.objectMapper = objectMapper;
     }
 
@@ -231,6 +239,15 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
                 throw new ConflictException("The selected GitHub ref no longer matches the requested full commit SHA");
             }
             commitSha = resolvedCommit;
+        }
+        // Re-validate declarative OCI build and publish configs against active workspace registries & allowlists at queue time
+        for (StageDagValidator.ValidatedStageSpec spec : validatedGraph.orderedStages()) {
+            AllowedWorkerOperation op = AllowedWorkerOperation.resolveForStage(spec.stageType(), spec.metadata()).orElse(null);
+            if (op == AllowedWorkerOperation.OCI_IMAGE_BUILD) {
+                buildRequestValidator.validateBuildStageConfig(workspaceId, spec.stageKey(), spec.metadata(), spec.timeoutSeconds());
+            } else if (op == AllowedWorkerOperation.OCI_IMAGE_PUBLISH) {
+                buildRequestValidator.validatePublishStageConfig(workspaceId, spec.stageKey(), spec.metadata());
+            }
         }
         Map<String, List<StageSecretBindingDto>> pinnedDtoMap = toPinnedBindingDtoMap(pinnedByStageKey);
         String snapshotJson = buildImmutableSnapshotJson(
@@ -589,6 +606,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
 
         runRepository.flush();
         stageRunRepository.flush();
+        sourceHandoffService.cleanupForRun(run.getId());
 
         auditService.record(
                 workspace,

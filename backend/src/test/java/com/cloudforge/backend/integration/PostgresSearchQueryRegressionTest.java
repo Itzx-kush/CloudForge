@@ -9,6 +9,20 @@ import com.cloudforge.backend.secrets.entity.EnvironmentSecretVersionEntity;
 import com.cloudforge.backend.secrets.entity.SecretLifecycleStatus;
 import com.cloudforge.backend.secrets.repository.EnvironmentSecretRepository;
 import com.cloudforge.backend.secrets.repository.EnvironmentSecretVersionRepository;
+import com.cloudforge.backend.oci.entity.OciArtifactRetentionPolicy;
+import com.cloudforge.backend.oci.entity.OciArtifactVerificationStatus;
+import com.cloudforge.backend.oci.entity.OciBuildMode;
+import com.cloudforge.backend.oci.entity.OciBuildRecordEntity;
+import com.cloudforge.backend.oci.entity.OciBuildStatus;
+import com.cloudforge.backend.oci.entity.OciImageArtifactEntity;
+import com.cloudforge.backend.oci.entity.OciRegistryConnectionEntity;
+import com.cloudforge.backend.oci.entity.OciRegistryStatus;
+import com.cloudforge.backend.oci.entity.OciRegistryType;
+import com.cloudforge.backend.oci.repository.OciBuildRecordRepository;
+import com.cloudforge.backend.oci.repository.OciImageArtifactRepository;
+import com.cloudforge.backend.oci.repository.OciRegistryConnectionRepository;
+import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepository;
+import com.cloudforge.backend.worker.repository.StageExecutionAttemptRepository;
 import com.cloudforge.backend.entity.GitHubWorkflowEntity;
 import com.cloudforge.backend.entity.GitHubWorkflowRunEntity;
 import com.cloudforge.backend.entity.InstallationStatus;
@@ -173,6 +187,21 @@ class PostgresSearchQueryRegressionTest {
 
     @Autowired
     private WorkerResultProcessorService workerResultProcessorService;
+
+    @Autowired
+    private OciRegistryConnectionRepository ociRegistryConnectionRepository;
+
+    @Autowired
+    private OciBuildRecordRepository ociBuildRecordRepository;
+
+    @Autowired
+    private OciImageArtifactRepository ociImageArtifactRepository;
+
+    @Autowired
+    private PipelineStageRunRepository pipelineStageRunRepository;
+
+    @Autowired
+    private StageExecutionAttemptRepository stageExecutionAttemptRepository;
 
     private UserEntity ownerA;
     private UserEntity ownerB;
@@ -483,7 +512,7 @@ class PostgresSearchQueryRegressionTest {
     }
 
     @Test
-    void phase33WorkerRegistrationClaimLogsCompletionAndProgressionWorkOnPostgreSql() {
+    void phase33WorkerRegistrationClaimLogsCompletionAndProgressionWorkOnPostgreSql() throws Exception {
         var def = pipelineDefinitionService.createDefinition(
                 workspaceA.getId(),
                 new CreatePipelineDefinitionRequest(
@@ -619,6 +648,95 @@ class PostgresSearchQueryRegressionTest {
                 SecretLifecycleStatus.ACTIVE, false, "runtime", PageRequest.of(0, 10)
         );
         assertThat(filteredSecrets.getTotalElements()).isEqualTo(1);
+
+        // Phase 3.5B PostgreSQL V8 OCI registries, build records & immutable image artifacts search checks
+        OciRegistryConnectionEntity pgReg = new OciRegistryConnectionEntity();
+        pgReg.setWorkspace(workspaceA);
+        pgReg.setName("PG Local Registry");
+        pgReg.setSlug("pg-local-registry");
+        pgReg.setRegistryHost("127.0.0.1:5000");
+        pgReg.setScheme("http");
+        pgReg.setRegistryType(OciRegistryType.LOCAL_DEV);
+        pgReg.setAllowedNamespace("cloudforge");
+        pgReg.setAllowInsecureLocal(true);
+        pgReg.setStatus(OciRegistryStatus.ACTIVE);
+        pgReg.setCreatedBy(ownerA);
+        pgReg.setUpdatedBy(ownerA);
+        pgReg = ociRegistryConnectionRepository.saveAndFlush(pgReg);
+
+        var anyStage = pipelineStageRunRepository.findAll().stream()
+                .filter(s -> s.getWorkspace().getId().equals(workspaceA.getId()))
+                .findFirst().orElseThrow();
+        var anyAttempt = stageExecutionAttemptRepository.findAll().stream()
+                .filter(a -> a.getWorkspace().getId().equals(workspaceA.getId()))
+                .findFirst().orElseThrow();
+        String pgDigest = "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+        OciBuildRecordEntity pgBuild = new OciBuildRecordEntity();
+        pgBuild.setWorkspace(workspaceA);
+        pgBuild.setProject(projectA1);
+        pgBuild.setPipelineRun(anyStage.getPipelineRun());
+        pgBuild.setStageRun(anyStage);
+        pgBuild.setAttempt(anyAttempt);
+        pgBuild.setLinkedRepository(repoA1);
+        pgBuild.setGithubRepositoryId(repoA1.getGithubRepoId());
+        pgBuild.setRepositoryFullName(repoA1.getFullName());
+        pgBuild.setCommitSha("a1b2c3d4e5f60718293a4b5c6d7e8f9012345678");
+        pgBuild.setRegistryConnection(pgReg);
+        pgBuild.setDockerfilePath("Dockerfile");
+        pgBuild.setBuildContextPath(".");
+        pgBuild.setTargetImageName("cloudforge/pg-demo");
+        pgBuild.setTargetTag("pg-1");
+        pgBuild.setTargetPlatform("linux/amd64");
+        pgBuild.setBuildMode(OciBuildMode.LOCAL_TRUSTED_BUILDKIT);
+        pgBuild.setConfigChecksumSha256("1".repeat(64));
+        pgBuild.setConfigSnapshotJson("{}");
+        pgBuild.setStatus(OciBuildStatus.SUCCEEDED);
+        pgBuild.setBuiltManifestDigest(pgDigest);
+        pgBuild.setWorkerId("pg-oci-worker");
+        pgBuild = ociBuildRecordRepository.saveAndFlush(pgBuild);
+
+        OciImageArtifactEntity pgArt = new OciImageArtifactEntity();
+        pgArt.setWorkspace(workspaceA);
+        pgArt.setProject(projectA1);
+        pgArt.setPipelineRun(anyStage.getPipelineRun());
+        pgArt.setStageRun(anyStage);
+        pgArt.setAttempt(anyAttempt);
+        pgArt.setBuildRecord(pgBuild);
+        pgArt.setRegistryConnection(pgReg);
+        pgArt.setLinkedRepository(repoA1);
+        pgArt.setGithubRepositoryId(repoA1.getGithubRepoId());
+        pgArt.setRepositoryFullName(repoA1.getFullName());
+        pgArt.setCommitSha("a1b2c3d4e5f60718293a4b5c6d7e8f9012345678");
+        pgArt.setRegistryHost("127.0.0.1:5000");
+        pgArt.setImageRepository("cloudforge/pg-demo");
+        pgArt.setImageTag("pg-1");
+        pgArt.setManifestDigest(pgDigest);
+        pgArt.setImmutableReference("127.0.0.1:5000/cloudforge/pg-demo@" + pgDigest);
+        pgArt.setImageMediaType("application/vnd.oci.image.manifest.v1+json");
+        pgArt.setPlatform("linux/amd64");
+        pgArt.setImageSizeBytes(2048L);
+        pgArt.setVerificationStatus(OciArtifactVerificationStatus.VERIFIED);
+        pgArt.setVerifiedAt(Instant.now());
+        pgArt.setPublishedAt(Instant.now());
+        pgArt.setRetentionPolicy(OciArtifactRetentionPolicy.RETAIN_METADATA);
+        ociImageArtifactRepository.saveAndFlush(pgArt);
+
+        assertThat(ociBuildRecordRepository.searchByWorkspace(workspaceA.getId(), null, null, null, PageRequest.of(0, 10)).getTotalElements()).isEqualTo(1);
+        assertThat(ociBuildRecordRepository.searchByWorkspace(workspaceA.getId(), projectA1.getId(), OciBuildStatus.SUCCEEDED, "pg-demo", PageRequest.of(0, 10)).getTotalElements()).isEqualTo(1);
+        assertThat(ociBuildRecordRepository.searchByWorkspace(workspaceA.getId(), null, null, "%", PageRequest.of(0, 10)).getTotalElements()).isZero();
+
+        assertThat(ociImageArtifactRepository.searchByWorkspace(workspaceA.getId(), null, null, null, PageRequest.of(0, 10)).getTotalElements()).isEqualTo(1);
+        assertThat(ociImageArtifactRepository.searchByWorkspace(workspaceA.getId(), projectA1.getId(), OciArtifactVerificationStatus.VERIFIED, "abcdef", PageRequest.of(0, 10)).getTotalElements()).isEqualTo(1);
+        assertThat(ociImageArtifactRepository.searchByWorkspace(workspaceA.getId(), null, null, "%", PageRequest.of(0, 10)).getTotalElements()).isZero();
+
+        mockMvc.perform(get("/api/workspaces/" + workspaceA.getId() + "/builds").with(authenticatedUser(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1));
+        mockMvc.perform(get("/api/workspaces/" + workspaceA.getId() + "/artifacts").with(authenticatedUser(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].manifestDigest").value(pgDigest));
     }
 
     private LinkedRepositoryEntity saveRepo(
