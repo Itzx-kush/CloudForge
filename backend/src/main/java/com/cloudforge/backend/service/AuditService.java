@@ -13,6 +13,8 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.context.ApplicationEventPublisher;
+import com.cloudforge.backend.monitoring.OperationMetrics.CommittedAction;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -29,7 +31,10 @@ public class AuditService {
     private final AuditEventRepository auditEventRepository;
     private final ObjectMapper objectMapper;
 
-    public AuditService(AuditEventRepository auditEventRepository, ObjectMapper objectMapper) {
+    private final ApplicationEventPublisher publisher;
+
+    public AuditService(AuditEventRepository auditEventRepository, ObjectMapper objectMapper, ApplicationEventPublisher publisher) {
+        this.publisher = publisher;
         this.auditEventRepository = auditEventRepository;
         this.objectMapper = objectMapper;
     }
@@ -56,6 +61,7 @@ public class AuditService {
         event.setRequestId(MDC.get(RequestCorrelationFilter.MDC_REQUEST_ID_KEY));
 
         AuditEventEntity saved = auditEventRepository.save(event);
+        publisher.publishEvent(new CommittedAction(action));
         log.info(
                 "Audit event action={} resourceType={} resourceId={} workspaceId={} actor={}",
                 action,
