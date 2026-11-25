@@ -16,6 +16,7 @@ import com.cloudforge.backend.k8s.entity.KubernetesDeploymentConfigEntity;
 import com.cloudforge.backend.k8s.entity.KubernetesDeploymentEventEntity;
 import com.cloudforge.backend.k8s.entity.KubernetesDeploymentOperationEntity;
 import com.cloudforge.backend.k8s.entity.KubernetesDeploymentStatus;
+import com.cloudforge.backend.k8s.entity.KubernetesOperationKind;
 import com.cloudforge.backend.k8s.entity.KubernetesNamespaceBindingEntity;
 import com.cloudforge.backend.k8s.entity.KubernetesNamespaceBindingStatus;
 import com.cloudforge.backend.k8s.repository.KubernetesClusterConnectionRepository;
@@ -24,6 +25,7 @@ import com.cloudforge.backend.k8s.repository.KubernetesDeploymentEventRepository
 import com.cloudforge.backend.k8s.repository.KubernetesDeploymentOperationRepository;
 import com.cloudforge.backend.k8s.repository.KubernetesNamespaceBindingRepository;
 import com.cloudforge.backend.oci.entity.OciArtifactVerificationStatus;
+import com.cloudforge.backend.oci.entity.OciArtifactRetentionPolicy;
 import com.cloudforge.backend.oci.entity.OciImageArtifactEntity;
 import com.cloudforge.backend.oci.repository.OciImageArtifactRepository;
 import com.cloudforge.backend.oci.service.OciBuildLifecycleService;
@@ -54,6 +56,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -292,8 +295,34 @@ public class KubernetesDeploymentLifecycleService {
         OciImageArtifactEntity artifact = op.getOciArtifact();
         if (artifact.getVerificationStatus() != OciArtifactVerificationStatus.VERIFIED
                 || !OciBuildLifecycleService.isValidDigest(artifact.getManifestDigest())
-                || !artifact.getImmutableReference().endsWith("@" + artifact.getManifestDigest())) {
+                || artifact.getImmutableReference() == null
+                || !artifact.getImmutableReference().endsWith("@" + artifact.getManifestDigest())
+                || !artifact.getImmutableReference().equals(op.getImmutableImageReference())
+                || !artifact.getManifestDigest().equals(op.getManifestDigest())) {
             throw new ConflictException("OCI artifact must be VERIFIED with a valid immutable SHA-256 digest");
+        }
+
+        WorkerKubernetesDtos.ReleaseExecution releaseExecution = null;
+        String executionChecksum = op.getManifestChecksumSha256();
+        if (op.getOperationKind() != KubernetesOperationKind.DEPLOYMENT) {
+            String kind = op.getOperationKind().name();
+            executionChecksum = kind + ":" + executionChecksum;
+            if (op.getOperationKind() == KubernetesOperationKind.ROLLBACK) {
+                if ((op.getEnvironment().getEnvironmentType() == EnvironmentType.PRODUCTION
+                        || cluster.getEnvironmentCategory() == EnvironmentType.PRODUCTION)
+                        && (!k8sProperties.isAllowProductionDeployments() || op.getProductionApprovedAt() == null)) {
+                    throw new ForbiddenOperationException("Production rollback requires the production gate and explicit approval");
+                }
+                KubernetesDeploymentOperationEntity guard = deploymentOperationRepository
+                        .findByIdAndWorkspaceIdWithDetails(op.getGuardObservationId(), op.getWorkspace().getId())
+                        .filter(observation -> KubernetesDeploymentService.ownsTarget(op, observation)
+                                && KubernetesDeploymentService.isVerifiedObservation(observation))
+                        .orElseThrow(() -> new ConflictException("The expected current workload evidence is unavailable"));
+                releaseExecution = new WorkerKubernetesDtos.ReleaseExecution(kind, guard.getImmutableImageReference(),
+                        guard.getK8sDeploymentUid(), guard.getK8sServiceUid(), guard.getObservedGeneration());
+            } else {
+                releaseExecution = new WorkerKubernetesDtos.ReleaseExecution(kind, op.getImmutableImageReference(), null, null, null);
+            }
         }
 
         op.setAttempt(attempt);
@@ -331,7 +360,7 @@ public class KubernetesDeploymentLifecycleService {
                 op.getImmutableImageReference(),
                 op.getManifestDigest(),
                 op.getSourceCommitSha(),
-                op.getManifestChecksumSha256(),
+                executionChecksum,
                 op.getRequestedReplicas(),
                 intVal(snapshot, "containerPort", 8080),
                 intVal(snapshot, "servicePort", 80),
@@ -348,7 +377,8 @@ public class KubernetesDeploymentLifecycleService {
                 intVal(snapshot, "deploymentTimeoutSeconds", 300),
                 boolVal(snapshot, "readOnlyRootFilesystem", true),
                 boolVal(snapshot, "runAsNonRoot", true),
-                longVal(snapshot, "runAsUser", 10001L)
+                longVal(snapshot, "runAsUser", 10001L),
+                releaseExecution
         );
     }
 
@@ -376,6 +406,12 @@ public class KubernetesDeploymentLifecycleService {
             throw new BadRequestException("Use /k8s-result endpoint for terminal deployment outcomes");
         }
 
+        if (op.getOperationKind() == KubernetesOperationKind.RECONCILIATION && request.applyInitiated()) {
+            throw new ConflictException("Reconciliation permits read-only observation");
+        }
+        if (request.applyInitiated() && ctx.attempt().getCancellationRequestedAt() != null) {
+            throw new ConflictException("Cancellation prevents further Kubernetes writes");
+        }
         Instant now = Instant.now();
         KubernetesDeploymentStatus previous = op.transitionStatus(request.status(), now);
         if (request.applyInitiated()) {
@@ -405,7 +441,7 @@ public class KubernetesDeploymentLifecycleService {
         if (previous != request.status() || StringUtils.hasText(request.message())) {
             recordDeploymentEvent(
                     op,
-                    "DEPLOYMENT_" + request.status().name(),
+                    op.getOperationKind().name() + "_" + request.status().name(),
                     previous.name(),
                     request.status().name(),
                     "worker:" + principal.workerId(),
@@ -446,6 +482,9 @@ public class KubernetesDeploymentLifecycleService {
             throw new BadRequestException("Deployment result must report a terminal status");
         }
 
+        if (op.getOperationKind() == KubernetesOperationKind.RECONCILIATION && request.applyInitiated()) {
+            throw new ConflictException("Reconciliation permits read-only observation");
+        }
         Instant now = request.completedAt() != null ? request.completedAt() : Instant.now();
         if (request.applyInitiated()) {
             op.setApplyInitiated(true);
@@ -476,7 +515,10 @@ public class KubernetesDeploymentLifecycleService {
                     || op.getReadyReplicas() < op.getRequestedReplicas()
                     || op.getAvailableReplicas() < op.getRequestedReplicas()
                     || op.getUpdatedReplicas() < op.getRequestedReplicas()
-                    || !StringUtils.hasText(op.getK8sDeploymentUid())) {
+                    || !StringUtils.hasText(op.getK8sDeploymentUid())
+                    || (op.getOperationKind() != KubernetesOperationKind.DEPLOYMENT
+                        && (!StringUtils.hasText(op.getK8sServiceUid()) || op.getObservedGeneration() == null
+                            || op.getObservedGeneration() <= 0))) {
                 throw new ConflictException(
                         "Cannot mark Kubernetes deployment SUCCEEDED until desired replicas are ready/available and the deployed immutable image digest is verified"
                 );
@@ -491,7 +533,7 @@ public class KubernetesDeploymentLifecycleService {
 
             recordDeploymentEvent(
                     op,
-                    "DEPLOYMENT_SUCCEEDED",
+                    op.getOperationKind().name() + "_SUCCEEDED",
                     prev.name(),
                     KubernetesDeploymentStatus.SUCCEEDED.name(),
                     "worker:" + principal.workerId(),
@@ -509,7 +551,7 @@ public class KubernetesDeploymentLifecycleService {
             auditService.record(
                     op.getWorkspace(),
                     null,
-                    "KUBERNETES_DEPLOYMENT_SUCCEEDED",
+                    "KUBERNETES_" + op.getOperationKind().name() + "_SUCCEEDED",
                     "KUBERNETES_DEPLOYMENT",
                     op.getId().toString(),
                     "Deployment \"" + op.getDeploymentName() + "\" in namespace \"" + op.getNamespaceName()
@@ -540,7 +582,7 @@ public class KubernetesDeploymentLifecycleService {
 
         recordDeploymentEvent(
                 op,
-                "DEPLOYMENT_" + targetStatus.name(),
+                op.getOperationKind().name() + "_" + targetStatus.name(),
                 prev.name(),
                 targetStatus.name(),
                 "worker:" + principal.workerId(),
@@ -557,7 +599,7 @@ public class KubernetesDeploymentLifecycleService {
         auditService.record(
                 op.getWorkspace(),
                 null,
-                "KUBERNETES_DEPLOYMENT_" + targetStatus.name(),
+                "KUBERNETES_" + op.getOperationKind().name() + "_" + targetStatus.name(),
                 "KUBERNETES_DEPLOYMENT",
                 op.getId().toString(),
                 "Deployment \"" + op.getDeploymentName() + "\" ended with " + targetStatus
@@ -631,7 +673,7 @@ public class KubernetesDeploymentLifecycleService {
 
             recordDeploymentEvent(
                     op,
-                    "DEPLOYMENT_" + target.name(),
+                    op.getOperationKind().name() + "_" + target.name(),
                     prev.name(),
                     target.name(),
                     "system:reconciliation",
@@ -716,8 +758,21 @@ public class KubernetesDeploymentLifecycleService {
         if (!cfg.getProject().getId().equals(run.getProject().getId())) {
             throw new ForbiddenOperationException("Deployment config project mismatch");
         }
-        if (cfg.getEnvironment().getEnvironmentType() == EnvironmentType.PRODUCTION
-                && !k8sProperties.isAllowProductionDeployments()) {
+        var cluster = clusterRepository.findByIdAndWorkspaceIdForUpdate(cfg.getClusterConnection().getId(),
+                run.getWorkspace().getId()).orElseThrow(() -> new ConflictException("Cluster is unavailable"));
+        if (deploymentOperationRepository.existsActiveOperationForTarget(
+                cluster.getId(), cfg.getNamespaceName(), cfg.getDeploymentName(), ACTIVE_DEPLOYMENT_STATUSES)) {
+            throw new ConflictException("Another deployment operation is active for this workload");
+        }
+        var previous = deploymentOperationRepository
+                .findFirstByClusterConnectionIdAndNamespaceNameAndDeploymentNameOrderByCreatedAtDescIdDesc(
+                        cluster.getId(), cfg.getNamespaceName(), cfg.getDeploymentName());
+        if (previous.filter(KubernetesDeploymentService::requiresReconciliation).isPresent()) {
+            throw new ConflictException("External workload state requires reconciliation before deploying");
+        }
+        if ((cfg.getEnvironment().getEnvironmentType() == EnvironmentType.PRODUCTION
+                || cluster.getEnvironmentCategory() == EnvironmentType.PRODUCTION)
+                && (!k8sProperties.isAllowProductionDeployments() || cluster.isProductionApprovalRequired())) {
             throw new ForbiddenOperationException("Automated production deployments are disabled by platform policy");
         }
 
@@ -802,7 +857,7 @@ public class KubernetesDeploymentLifecycleService {
         op.setManifestDigest(artifact.getManifestDigest());
         op.setSourceCommitSha(artifact.getCommitSha());
         op.setManifestChecksumSha256(bundle.manifestChecksumSha256());
-        op.setConfigSnapshotJson(writeJson(Map.ofEntries(
+        Map<String, Object> snapshot = new LinkedHashMap<>(Map.ofEntries(
                 Map.entry("deploymentName", cfg.getDeploymentName()),
                 Map.entry("serviceName", cfg.getServiceName()),
                 Map.entry("replicaCount", cfg.getReplicaCount()),
@@ -821,7 +876,15 @@ public class KubernetesDeploymentLifecycleService {
                 Map.entry("readOnlyRootFilesystem", cfg.isReadOnlyRootFilesystem()),
                 Map.entry("runAsNonRoot", cfg.isRunAsNonRoot()),
                 Map.entry("runAsUser", cfg.getRunAsUser())
-        )));
+        ));
+        if (startup != null) {
+            snapshot.put("startupProbe", startup);
+        }
+        op.setConfigSnapshotJson(writeJson(snapshot));
+        op.setRevisionNumber(deploymentOperationRepository.latestRevision(
+                cluster.getId(), cfg.getNamespaceName(), cfg.getDeploymentName()) + 1);
+        artifact.setRetentionPolicy(OciArtifactRetentionPolicy.REFERENCED_PROTECTED);
+        artifactRepository.save(artifact);
         op.setRequestedReplicas(cfg.getReplicaCount());
         op.setRequestedBy(run.getRequestedBy());
         op.setAssignedWorkerId(principal.workerId());

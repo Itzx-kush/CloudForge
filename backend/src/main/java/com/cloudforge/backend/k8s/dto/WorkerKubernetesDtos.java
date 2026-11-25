@@ -112,8 +112,13 @@ public final class WorkerKubernetesDtos {
             int deploymentTimeoutSeconds,
             boolean readOnlyRootFilesystem,
             boolean runAsNonRoot,
-            long runAsUser
+            long runAsUser,
+            ReleaseExecution releaseExecution
     ) {
+    }
+
+    public record ReleaseExecution(String kind, String expectedImage, String expectedDeploymentUid,
+                                   String expectedServiceUid, Long expectedGeneration) {
     }
 
     public record DeploymentStatusUpdateRequest(

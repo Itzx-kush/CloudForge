@@ -1215,3 +1215,33 @@ export interface KubernetesDeploymentEvent {
   metadata: Record<string, unknown>;
   occurredAt: string;
 }
+
+export interface KubernetesRelease {
+  revision: number | null;
+  kind: 'DEPLOYMENT' | 'ROLLBACK' | 'RECONCILIATION';
+  type: 'INITIAL_DEPLOYMENT' | 'UPDATE' | 'ROLLBACK' | 'RECONCILIATION';
+  targetReleaseId: string | null;
+  expectedOperationId: string | null;
+  reason: string | null;
+  historicallyVerified: boolean;
+  reconciliationRequired: boolean;
+  operation: KubernetesDeploymentOperation;
+}
+
+export interface ReleaseComparison {
+  first: string;
+  second: string;
+  fields: { field: string; before: unknown; after: unknown; changed: boolean }[];
+}
+
+export interface RollbackPreview {
+  target: KubernetesRelease;
+  current: KubernetesRelease | null;
+  expectedOperationId: string;
+  eligible: boolean;
+  blockedReason: string | null;
+  productionApprovalRequired: boolean;
+  comparison: ReleaseComparison | null;
+  risk: string;
+  reconciliationRequired: boolean;
+}

@@ -8,6 +8,7 @@ import type {
   KubernetesDeploymentEvent,
   KubernetesDeploymentOperation,
   KubernetesNamespaceBinding,
+  KubernetesRelease,
   KubernetesSubsystemStatus,
   OciImageArtifact,
   WorkspaceRole,
@@ -205,6 +206,12 @@ const SAMPLE_ARTIFACT: OciImageArtifact = {
   createdAt: '2026-11-24T12:00:00Z',
 };
 
+const FIRST_RELEASE: KubernetesRelease = {
+  revision: 1, kind: 'DEPLOYMENT', type: 'INITIAL_DEPLOYMENT', targetReleaseId: null,
+  expectedOperationId: null, reason: null, historicallyVerified: true, reconciliationRequired: false,
+  operation: SAMPLE_DEPLOYMENT,
+};
+
 function installMockApi(options?: {
   role?: WorkspaceRole;
   status?: KubernetesSubsystemStatus;
@@ -219,6 +226,7 @@ function installMockApi(options?: {
     options?.deployments ?? [SAMPLE_DEPLOYMENT]
   );
 
+  let queuedRelease: KubernetesRelease | null = null;
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const method = (init?.method ?? 'GET').toUpperCase();
@@ -291,6 +299,26 @@ function installMockApi(options?: {
     if (url.includes('/namespaces') && method === 'GET') {
       return jsonResponse([SAMPLE_NS]);
     }
+    if (url.includes('/releases/dep-1/rollback-preview')) {
+      return jsonResponse({
+        target: FIRST_RELEASE, current: null, expectedOperationId: 'operation-current',
+        eligible: true, blockedReason: null, productionApprovalRequired: false, comparison: null,
+        risk: 'Rollout may interrupt service.', reconciliationRequired: false,
+      });
+    }
+    if (url.includes('/releases/dep-1/rollback') && method === 'POST') {
+      queuedRelease = {
+        ...FIRST_RELEASE, revision: 3, kind: 'ROLLBACK', type: 'ROLLBACK', targetReleaseId: 'dep-1',
+        historicallyVerified: false, operation: { ...SAMPLE_DEPLOYMENT, id: 'rollback-3', status: 'PENDING', readyReplicas: 0 },
+      };
+      return jsonResponse(queuedRelease, 202);
+    }
+    if (url.includes('/releases/rollback-3')) return jsonResponse(queuedRelease);
+    if (url.includes('/releases/dep-1')) return jsonResponse(FIRST_RELEASE);
+    if (url.includes('/releases?')) {
+      return jsonResponse({ items: [FIRST_RELEASE], page: 0, size: 20, totalPages: 1, totalElements: 1 });
+    }
+    if (url.includes('/deployments/rollback-3/events')) return jsonResponse([]);
     if (url.includes('/deployments/dep-1/events') && method === 'GET') {
       return jsonResponse(SAMPLE_EVENTS);
     }
@@ -649,5 +677,27 @@ describe('CloudForge Phase 3.6 Kubernetes Deployment Console UI', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Register Cluster/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /New Deployment/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('Release history and rollback', () => {
+  it('requires rollback confirmation and reports the queued outcome', async () => {
+    const { fetchMock } = installMockApi();
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/deployments']}><AppRoutes /></MemoryRouter>);
+    await user.click(await screen.findByRole('tab', { name: 'Release History' }));
+    await user.click(await screen.findByRole('button', { name: 'Inspect' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Check rollback eligibility' }));
+    const queue = await within(dialog).findByRole('button', { name: 'Queue rollback' });
+    expect(queue).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('Rollback reason'), 'Restore verified workload');
+    await user.click(within(dialog).getByRole('checkbox'));
+    await user.click(queue);
+    expect(await within(dialog).findByText('Rollback request queued successfully.')).toBeInTheDocument();
+    expect(within(dialog).getByText('PENDING')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Rollback completed and verified.')).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/rollback')
+      && new Headers(init?.headers).has('Idempotency-Key') && new Headers(init?.headers).has('X-XSRF-TOKEN'))).toBe(true);
   });
 });

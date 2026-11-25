@@ -27,6 +27,9 @@ import type {
   KubernetesDeploymentOperation,
   KubernetesDeploymentStatus,
   KubernetesDeploymentStatusSnapshot,
+  KubernetesRelease,
+  ReleaseComparison,
+  RollbackPreview,
   KubernetesNamespaceBinding,
   KubernetesSubsystemStatus,
   LinkedRepository,
@@ -1106,3 +1109,43 @@ export function cancelKubernetesDeployment(
 }
 
 export { HEALTH_ENDPOINT };
+
+export function fetchReleaseHistory(workspace: string, filters: Record<string, string> = {}) {
+  return apiRequest<PagedResponse<KubernetesRelease>>(
+    `/api/workspaces/${workspace}/releases?${new URLSearchParams(filters)}`
+  );
+}
+
+export function fetchRelease(workspace: string, id: string) {
+  return apiRequest<KubernetesRelease>(`/api/workspaces/${workspace}/releases/${id}`);
+}
+
+export function compareReleases(workspace: string, first: string, second: string) {
+  return apiRequest<ReleaseComparison>(
+    `/api/workspaces/${workspace}/releases/compare?${new URLSearchParams({ first, second })}`
+  );
+}
+
+export function previewReleaseRollback(workspace: string, id: string) {
+  return apiRequest<RollbackPreview>(`/api/workspaces/${workspace}/releases/${id}/rollback-preview`, {
+    method: 'POST',
+  });
+}
+
+export function requestReleaseRollback(
+  workspace: string, id: string, expectedOperationId: string, reason: string, key: string
+) {
+  return apiRequest<KubernetesRelease>(`/api/workspaces/${workspace}/releases/${id}/rollback`, {
+    method: 'POST',
+    body: { expectedOperationId, reason, confirmed: true },
+    headers: { 'Idempotency-Key': key },
+  });
+}
+
+export function reconcileRelease(workspace: string, id: string, candidateReleaseId: string, key: string) {
+  return apiRequest<KubernetesRelease>(`/api/workspaces/${workspace}/deployments/${id}/reconcile`, {
+    method: 'POST',
+    body: { candidateReleaseId },
+    headers: { 'Idempotency-Key': key },
+  });
+}

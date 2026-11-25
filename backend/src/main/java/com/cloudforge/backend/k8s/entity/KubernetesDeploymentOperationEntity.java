@@ -21,6 +21,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Immutable release/deployment ledger entry recording every Kubernetes rolling update,
@@ -70,6 +71,25 @@ public class KubernetesDeploymentOperationEntity extends BaseAuditableEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "attempt_id")
     private StageExecutionAttemptEntity attempt;
+
+    @Column(name = "revision_number", updatable = false)
+    private Long revisionNumber;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "operation_kind", nullable = false, length = 16, updatable = false)
+    private KubernetesOperationKind operationKind = KubernetesOperationKind.DEPLOYMENT;
+
+    @Column(name = "restored_release_id", updatable = false)
+    private UUID restoredReleaseId;
+
+    @Column(name = "expected_operation_id", updatable = false)
+    private UUID expectedOperationId;
+
+    @Column(name = "guard_observation_id", updatable = false)
+    private UUID guardObservationId;
+
+    @Column(name = "operation_reason", length = 128, updatable = false)
+    private String operationReason;
 
     @Column(name = "idempotency_key", length = 128)
     private String idempotencyKey;
@@ -557,5 +577,52 @@ public class KubernetesDeploymentOperationEntity extends BaseAuditableEntity {
 
     public Long getRowVersion() {
         return rowVersion;
+    }
+    public Long getRevisionNumber() {
+        return revisionNumber;
+    }
+
+    public void setRevisionNumber(Long revisionNumber) {
+        this.revisionNumber = revisionNumber;
+    }
+
+    public KubernetesOperationKind getOperationKind() {
+        return operationKind;
+    }
+
+    public void setOperationKind(KubernetesOperationKind operationKind) {
+        this.operationKind = operationKind;
+    }
+
+    public UUID getRestoredReleaseId() {
+        return restoredReleaseId;
+    }
+
+    public void setRestoredReleaseId(UUID restoredReleaseId) {
+        this.restoredReleaseId = restoredReleaseId;
+    }
+
+    public UUID getExpectedOperationId() {
+        return expectedOperationId;
+    }
+
+    public void setExpectedOperationId(UUID expectedOperationId) {
+        this.expectedOperationId = expectedOperationId;
+    }
+
+    public String getOperationReason() {
+        return operationReason;
+    }
+
+    public void setOperationReason(String operationReason) {
+        this.operationReason = operationReason;
+    }
+
+    public UUID getGuardObservationId() {
+        return guardObservationId;
+    }
+
+    public void setGuardObservationId(UUID guardObservationId) {
+        this.guardObservationId = guardObservationId;
     }
 }

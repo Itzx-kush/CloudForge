@@ -177,6 +177,33 @@ class KubernetesManifestAndSecurityTest {
         );
     }
 
+    @Test
+    void releaseDescriptorBindsModeToTheCanonicalChecksum() {
+        var base = validDescriptor(null);
+        var expected = KubernetesManifestBuilder.buildAndVerify(base).manifestChecksumSha256();
+        var mode = new ControlPlaneClient.KubernetesReleaseExecution("RECONCILIATION", base.immutableImageReference(), null, null, null);
+        assertThat(KubernetesManifestBuilder.buildAndVerify(forRelease(base, base.immutableImageReference(), base.manifestDigest(),
+                "RECONCILIATION:" + expected, mode)).manifestChecksumSha256()).isEqualTo(expected);
+        assertThatThrownBy(() -> KubernetesManifestBuilder.buildAndVerify(
+                forRelease(base, base.immutableImageReference(), base.manifestDigest(), expected, mode)))
+                .isInstanceOf(KubernetesManifestBuilder.ManifestPolicyException.class);
+    }
+
+    static ControlPlaneClient.KubernetesExecutionDescriptor forRelease(
+            ControlPlaneClient.KubernetesExecutionDescriptor d, String image, String digest, String checksum,
+            ControlPlaneClient.KubernetesReleaseExecution release
+    ) {
+        return new ControlPlaneClient.KubernetesExecutionDescriptor(
+                UUID.randomUUID(), d.workspaceId(), d.projectId(), d.environmentId(), d.environmentType(),
+                d.clusterConnectionId(), d.clusterIdentifier(), d.apiServerUrl(), d.allowLocalLoopback(),
+                d.namespaceBindingId(), d.namespaceName(), d.workloadServiceAccountName(), d.imagePullSecretName(),
+                d.deploymentConfigId(), d.ociArtifactId(), d.deploymentName(), d.serviceName(), image, digest,
+                d.sourceCommitSha(), checksum, d.replicaCount(), d.containerPort(), d.servicePort(), d.cpuRequest(),
+                d.cpuLimit(), d.memoryRequest(), d.memoryLimit(), d.readinessProbe(), d.livenessProbe(), d.startupProbe(),
+                d.rollingMaxSurge(), d.rollingMaxUnavailable(), d.progressDeadlineSeconds(), d.deploymentTimeoutSeconds(),
+                d.readOnlyRootFilesystem(), d.runAsNonRoot(), d.runAsUser(), release);
+    }
+
     private static ControlPlaneClient.KubernetesExecutionDescriptor withChecksum(
             ControlPlaneClient.KubernetesExecutionDescriptor d, String checksum
     ) {

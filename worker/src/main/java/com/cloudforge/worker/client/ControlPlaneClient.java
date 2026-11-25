@@ -521,8 +521,36 @@ public interface ControlPlaneClient {
             int deploymentTimeoutSeconds,
             boolean readOnlyRootFilesystem,
             boolean runAsNonRoot,
-            long runAsUser
+            long runAsUser,
+            KubernetesReleaseExecution releaseExecution
     ) {
+        public KubernetesExecutionDescriptor(
+                UUID deploymentOperationId, UUID workspaceId, UUID projectId, UUID environmentId, String
+                environmentType, UUID clusterConnectionId, String clusterIdentifier, String apiServerUrl, boolean
+                allowLocalLoopback, UUID namespaceBindingId, String namespaceName, String workloadServiceAccountName,
+                String imagePullSecretName, UUID deploymentConfigId, UUID ociArtifactId, String deploymentName, String
+                serviceName, String immutableImageReference, String manifestDigest, String sourceCommitSha, String
+                manifestChecksumSha256, int replicaCount, int containerPort, int servicePort, String cpuRequest, String
+                cpuLimit, String memoryRequest, String memoryLimit, KubernetesProbeSpec readinessProbe,
+                KubernetesProbeSpec livenessProbe, KubernetesProbeSpec startupProbe, String rollingMaxSurge, String
+                rollingMaxUnavailable, int progressDeadlineSeconds, int deploymentTimeoutSeconds, boolean
+                readOnlyRootFilesystem, boolean runAsNonRoot, long runAsUser
+        ) {
+            this(
+                    deploymentOperationId, workspaceId, projectId, environmentId, environmentType, clusterConnectionId,
+                    clusterIdentifier, apiServerUrl, allowLocalLoopback, namespaceBindingId, namespaceName,
+                    workloadServiceAccountName, imagePullSecretName, deploymentConfigId, ociArtifactId, deploymentName,
+                    serviceName, immutableImageReference, manifestDigest, sourceCommitSha, manifestChecksumSha256,
+                    replicaCount, containerPort, servicePort, cpuRequest, cpuLimit, memoryRequest, memoryLimit,
+                    readinessProbe, livenessProbe, startupProbe, rollingMaxSurge, rollingMaxUnavailable,
+                    progressDeadlineSeconds, deploymentTimeoutSeconds, readOnlyRootFilesystem, runAsNonRoot, runAsUser,
+                    null
+            );
+        }
+    }
+
+    record KubernetesReleaseExecution(String kind, String expectedImage, String expectedDeploymentUid,
+                                      String expectedServiceUid, Long expectedGeneration) {
     }
 
     record KubernetesStatusUpdatePayload(

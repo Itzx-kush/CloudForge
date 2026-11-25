@@ -838,6 +838,7 @@ class PostgresSearchQueryRegressionTest {
         pgCfg = k8sConfigRepository.saveAndFlush(pgCfg);
 
         KubernetesDeploymentOperationEntity pgOp = new KubernetesDeploymentOperationEntity();
+        pgOp.setRevisionNumber(1L);
         pgOp.setWorkspace(workspaceA);
         pgOp.setProject(projectA1);
         pgOp.setEnvironment(pgEnv);
@@ -903,6 +904,17 @@ class PostgresSearchQueryRegressionTest {
                         .with(authenticatedUser(ownerA)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].eventType").value("DEPLOYMENT_SUCCEEDED"));
+
+        String releaseEndpoint = "/api/workspaces/" + workspaceA.getId() + "/releases";
+        mockMvc.perform(get(releaseEndpoint).with(authenticatedUser(ownerA)).param("size", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].revision").value(1))
+                .andExpect(jsonPath("$.items[0].historicallyVerified").value(false));
+        mockMvc.perform(get(releaseEndpoint).with(authenticatedUser(ownerA))
+                        .param("projectId", projectA1.getId().toString()).param("environmentId", pgEnv.getId().toString())
+                        .param("clusterId", pgCluster.getId().toString()).param("deployment", "payments-pg-100")
+                        .param("status", "SUCCEEDED"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].operation.id").value(pgOp.getId().toString()));
     }
 
     private LinkedRepositoryEntity saveRepo(

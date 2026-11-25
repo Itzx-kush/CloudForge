@@ -91,8 +91,17 @@ public interface KubernetesApiClient {
             int availableReplicas,
             Map<String, String> labels,
             List<String> containerImages,
-            List<DeploymentConditionInfo> conditions
+            List<DeploymentConditionInfo> conditions,
+            String resourceVersion,
+            String resourceJson
     ) {
+        public DeploymentSnapshot(String uid, String name, String namespace, long generation, long observedGeneration,
+                                  int specReplicas, int statusReplicas, int updatedReplicas, int readyReplicas,
+                                  int availableReplicas, Map<String, String> labels, List<String> containerImages,
+                                  List<DeploymentConditionInfo> conditions) {
+            this(uid, name, namespace, generation, observedGeneration, specReplicas, statusReplicas, updatedReplicas,
+                    readyReplicas, availableReplicas, labels, containerImages, conditions, null, null);
+        }
     }
 
     record ServiceSnapshot(
@@ -100,8 +109,13 @@ public interface KubernetesApiClient {
             String name,
             String namespace,
             String type,
-            Map<String, String> labels
+            Map<String, String> labels,
+            String resourceVersion,
+            String resourceJson
     ) {
+        public ServiceSnapshot(String uid, String name, String namespace, String type, Map<String, String> labels) {
+            this(uid, name, namespace, type, labels, null, null);
+        }
     }
 
     record ContainerStatusSnapshot(

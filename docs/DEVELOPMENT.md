@@ -186,3 +186,7 @@ curl -i http://localhost:8080/api/health   # Expect HTTP 200 UP
 
 - **Phase 3.5 (Source & OCI BuildKit):** See the [OCI builds & registry runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md) for GitHub App permissions, BuildKit worker isolation, and local registry verification.
 - **Phase 3.6 (Kubernetes Deployment Engine):** By default, Kubernetes deployment execution is **disabled** (`CLOUDFORGE_K8S_ENABLED=false`, locked off in `application-render.yml`). Never mount kubeconfig files or install `kubectl` inside the Spring Boot web server. To run a dedicated local `KUBERNETES_DEPLOY` worker against a disposable local `kind`/`k3d`/`k3s` cluster, provision an isolated namespace via `infrastructure/kubernetes/local/provision-local-namespace.ps1` (or `.sh`), store the short-lived `cloudforge-deployer` bearer token in Phase 3.4 Encrypted Secrets, and follow the complete runbook in [`docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`](PHASE3_6_KUBERNETES_DEPLOYMENT.md).
+
+## Release history and rollback
+
+Use the [Phase 3.7 runbook](PHASE3_7_RELEASE_HISTORY_ROLLBACK.md) for release revision history, permissions, reconciliation, and disposable-cluster verification. Run matching control-plane and Kubernetes worker builds when verifying release operations.

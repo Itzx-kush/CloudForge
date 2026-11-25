@@ -117,7 +117,7 @@ Located under `backend/src/main/resources/db/migration/`:
 ## 3. Phase 3.5 & Phase 3.6 Delivery Plane (Implemented — Trusted Local / Approved Cluster Mode)
 
 - **Phase 3.5 (Immutable OCI Builds & Publishing):** Splits container production across isolated, lease-fenced `GITHUB_SOURCE` and `OCI_BUILDKIT` workers, independently verifying pushed manifest SHA-256 digests and persisting immutable `oci_image_artifacts`. See [`docs/PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md`](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md).
-- **Phase 3.6 (Secure Kubernetes Deployment Engine):** Extends the existing Phase 3.2/3.3 orchestration and worker scheduler with a dedicated `KUBERNETES_DEPLOY` worker mode backed by `io.kubernetes:client-java` (strict HTTPS, explicit X.509 CA PEM trust, SSRF-safe DNS, `followRedirects(false)`, Server-Side Apply `force=false`, ownership-label guard). The control plane validates declarative `Deployment` + `ClusterIP Service` configs against verified Phase 3.5 `@sha256:` artifacts, resolves least-privilege ServiceAccount tokens strictly from Phase 3.4 AES-256-GCM encrypted secrets, enforces explicit `OWNER` production approval gates, observes real rollout readiness & pod diagnostics, and records `RECONCILIATION_REQUIRED` for post-apply cancellations or worker crashes without blind replay or premature Phase 3.7 rollback. See [`docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`](PHASE3_6_KUBERNETES_DEPLOYMENT.md).
+- **Phase 3.6 (Secure Kubernetes Deployment Engine):** Extends the existing Phase 3.2/3.3 orchestration and worker scheduler with a dedicated `KUBERNETES_DEPLOY` worker mode backed by `io.kubernetes:client-java` (strict HTTPS, explicit X.509 CA PEM trust, SSRF-safe DNS, `followRedirects(false)`, Server-Side Apply `force=false`, ownership-label guard). The control plane validates declarative `Deployment` + `ClusterIP Service` configs against verified Phase 3.5 `@sha256:` artifacts, resolves least-privilege ServiceAccount tokens strictly from Phase 3.4 AES-256-GCM encrypted secrets, enforces explicit `OWNER` production approval gates, observes real rollout readiness & pod diagnostics, and records `RECONCILIATION_REQUIRED` for post-apply cancellations or worker crashes when external state is uncertain. See [`docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`](PHASE3_6_KUBERNETES_DEPLOYMENT.md).
 
 ## 4. Planned Target Architecture (Phases 3.7–4)
 
@@ -139,3 +139,8 @@ flowchart TB
     Prom --> K8s
     Graf["Grafana Dashboards & Alerts"] --> Prom
 ```
+
+
+### Release revisions and recovery
+
+Phase 3.7 extends the Kubernetes operation ledger with target revisions and explicit rollback and reconciliation operations. Release requests share target locking with direct and pipeline deployments. Rollback restores a validated snapshot through the existing worker, and read-only worker observations capture evidence after uncertain writes. See [Phase 3.7 release history and rollback](PHASE3_7_RELEASE_HISTORY_ROLLBACK.md).

@@ -15,6 +15,7 @@ import com.cloudforge.backend.entity.WorkspaceRole;
 import com.cloudforge.backend.k8s.config.KubernetesDeploymentProperties;
 import com.cloudforge.backend.k8s.entity.KubernetesClusterStatus;
 import com.cloudforge.backend.k8s.entity.KubernetesDeploymentStatus;
+import com.cloudforge.backend.k8s.entity.KubernetesDeploymentEventEntity;
 import com.cloudforge.backend.k8s.repository.KubernetesClusterConnectionRepository;
 import com.cloudforge.backend.k8s.repository.KubernetesDeploymentConfigRepository;
 import com.cloudforge.backend.k8s.repository.KubernetesDeploymentEventRepository;
@@ -977,6 +978,131 @@ class KubernetesDeploymentEngineIntegrationTest {
                                 Map.entry("terminationConfirmed", true)
                         ))))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void releaseHistoryQueuesNewRollbackAndPreservesTheVerifiedTargets() throws Exception {
+        registerK8sWorker(k8sWorker1Id, k8sWorker1Secret);
+        var target = provisionValidatedClusterAndNamespace(devEnv, "DEVELOPMENT");
+        var first = queueReleaseFixture(target, 1);
+        recordVerifiedFixture(first, 1);
+        var second = queueReleaseFixture(target, 2);
+        recordVerifiedFixture(second, 2);
+        var workspace = workspaceA.getId();
+
+        mockMvc.perform(get("/api/workspaces/{ws}/releases", workspace).with(authenticatedUser(viewer)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].revision").value(2))
+                .andExpect(jsonPath("$.items[1].revision").value(1))
+                .andExpect(jsonPath("$.items[1].historicallyVerified").value(true))
+                .andExpect(content().string(not(containsString(BEARER_SECRET_VALUE))));
+
+        mockMvc.perform(get("/api/workspaces/{ws}/releases/{release}", workspaceB.getId(), first)
+                        .with(authenticatedUser(outsider)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/workspaces/{ws}/releases/compare", workspace)
+                        .with(authenticatedUser(viewer)).param("first", first.toString()).param("second", second.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.fields[?(@.field == 'replicaCount')].changed").value(true));
+
+        mockMvc.perform(post("/api/workspaces/{ws}/releases/{release}/rollback-preview", workspace, first)
+                        .with(authenticatedUser(developer)).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.eligible").value(true))
+                .andExpect(jsonPath("$.expectedOperationId").value(second.toString()));
+
+        var rollbackJson = Map.of("expectedOperationId", second, "reason", "Restore verified release", "confirmed", true);
+        rollbackRequest(asJson(rollbackJson), first, viewer, "rollback-viewer").andExpect(status().isForbidden());
+
+        rollbackRequest(asJson(Map.of("expectedOperationId", first, "reason", "Restore verified release", "confirmed", true)),
+                first, developer, "rollback-stale").andExpect(status().isConflict());
+
+        var response = rollbackRequest(asJson(rollbackJson), first, developer, "rollback-correct")
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.revision").value(3))
+                .andExpect(jsonPath("$.type").value("ROLLBACK"))
+                .andExpect(jsonPath("$.targetReleaseId").value(first.toString()))
+                .andExpect(jsonPath("$.operation.status").value("PENDING"))
+                .andExpect(jsonPath("$.operation.requestedReplicas").value(1))
+                .andReturn();
+        var rollbackId = objectMapper.readTree(response.getResponse().getContentAsString()).at("/operation/id").asText();
+
+        rollbackRequest(asJson(rollbackJson), first, developer, "rollback-correct")
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.operation.id").value(rollbackId));
+        rollbackRequest(asJson(rollbackJson), first, developer, "rollback-concurrent").andExpect(status().isConflict());
+
+        for (var release : List.of(first, second)) {
+            assertThat(operationRepository.findById(release).orElseThrow().getStatus())
+                    .isEqualTo(KubernetesDeploymentStatus.SUCCEEDED);
+        }
+        assertThat(auditEventRepository.findAll())
+                .anyMatch(event -> event.getAction().equals("KUBERNETES_ROLLBACK_REQUESTED"));
+    }
+
+    @Test
+    void reconcilesUncertainStateAsASeparateReadOnlyOperation() throws Exception {
+        registerK8sWorker(k8sWorker1Id, k8sWorker1Secret);
+        var target = provisionValidatedClusterAndNamespace(devEnv, "DEVELOPMENT");
+        var uncertainId = queueReleaseFixture(target, 1);
+        var uncertain = operationRepository.findById(uncertainId).orElseThrow();
+        uncertain.transitionStatus(KubernetesDeploymentStatus.RECONCILIATION_REQUIRED, Instant.now());
+        operationRepository.saveAndFlush(uncertain);
+
+        mockMvc.perform(post("/api/workspaces/{ws}/deployments/{release}/reconcile", workspaceA.getId(), uncertainId)
+                        .with(authenticatedUser(developer)).with(csrf()).header("Idempotency-Key", "observe-denied"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/workspaces/{ws}/deployments/{release}/reconcile", workspaceA.getId(), uncertainId)
+                        .with(authenticatedUser(owner)).with(csrf()).header("Idempotency-Key", "observe-release"))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.kind").value("RECONCILIATION"))
+                .andExpect(jsonPath("$.operation.applyInitiated").value(false))
+                .andExpect(jsonPath("$.expectedOperationId").value(uncertainId.toString()));
+        assertThat(operationRepository.findById(uncertainId).orElseThrow().getStatus())
+                .isEqualTo(KubernetesDeploymentStatus.RECONCILIATION_REQUIRED);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions rollbackRequest(String payload, UUID release, UserEntity actor, String key)
+            throws Exception {
+        return mockMvc.perform(post("/api/workspaces/{ws}/releases/{release}/rollback", workspaceA.getId(), release)
+                .with(authenticatedUser(actor)).with(csrf()).header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON).content(payload));
+    }
+
+    private String asJson(Object value) throws Exception {
+        return objectMapper.writeValueAsString(value);
+    }
+
+    private UUID queueReleaseFixture(ValidatedTarget target, int replicas) throws Exception {
+        var queued = mockMvc.perform(post("/api/workspaces/{ws}/deployments", workspaceA.getId())
+                        .with(authenticatedUser(owner)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(deployJson(projectA.getId(), devEnv.getId(), target.clusterId(), target.namespaceId(),
+                                verifiedArtifact.getId(), replicas)))
+                .andExpect(status().isCreated()).andReturn();
+        return UUID.fromString(objectMapper.readTree(queued.getResponse().getContentAsString()).get("id").asText());
+    }
+
+    private void recordVerifiedFixture(UUID id, long generation) {
+        var op = operationRepository.findById(id).orElseThrow();
+        var now = Instant.now();
+        for (var status : List.of(KubernetesDeploymentStatus.VALIDATING, KubernetesDeploymentStatus.APPLYING,
+                KubernetesDeploymentStatus.VERIFYING, KubernetesDeploymentStatus.SUCCEEDED)) {
+            op.transitionStatus(status, now);
+        }
+        op.setApplyInitiated(true);
+        op.setObservedGeneration(generation);
+        op.setObservedReplicas(op.getRequestedReplicas());
+        op.setUpdatedReplicas(op.getRequestedReplicas());
+        op.setReadyReplicas(op.getRequestedReplicas());
+        op.setAvailableReplicas(op.getRequestedReplicas());
+        op.setK8sDeploymentUid("existing-deployment-uid");
+        op.setK8sServiceUid("existing-service-uid");
+        operationRepository.saveAndFlush(op);
+        var event = new KubernetesDeploymentEventEntity();
+        event.setWorkspace(workspaceA);
+        event.setDeploymentOperation(op);
+        event.setEventType("DEPLOYMENT_SUCCEEDED");
+        event.setToStatus("SUCCEEDED");
+        event.setActorLabel("worker:fixture");
+        event.setMessage("Verified healthy rollout");
+        event.setMetadataJson("{}");
+        event.setOccurredAt(now);
+        eventRepository.saveAndFlush(event);
     }
 
     private ValidatedTarget provisionValidatedClusterAndNamespace(ProjectEnvironmentEntity env, String envCategory) throws Exception {

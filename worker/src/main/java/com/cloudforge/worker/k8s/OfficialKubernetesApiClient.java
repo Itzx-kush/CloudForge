@@ -1,5 +1,7 @@
 package com.cloudforge.worker.k8s;
 
+import io.kubernetes.client.openapi.JSON;
+
 import io.kubernetes.client.custom.V1Patch;
 import io.kubernetes.client.openapi.ApiClient;
 import io.kubernetes.client.openapi.ApiException;
@@ -435,7 +437,8 @@ public class OfficialKubernetesApiClient implements KubernetesApiClient {
 
         return new DeploymentSnapshot(
                 uid, name, ns, gen, obsGen, specReplicas, statusRep, updatedRep, readyRep, availRep,
-                labels, images, conditions
+                labels, images, conditions, dep.getMetadata() == null ? null : dep.getMetadata().getResourceVersion(),
+                JSON.serialize(dep)
         );
     }
 
@@ -446,7 +449,8 @@ public class OfficialKubernetesApiClient implements KubernetesApiClient {
         String type = svc.getSpec() != null && svc.getSpec().getType() != null ? svc.getSpec().getType() : "ClusterIP";
         Map<String, String> labels = svc.getMetadata() != null && svc.getMetadata().getLabels() != null
                 ? Map.copyOf(svc.getMetadata().getLabels()) : Map.of();
-        return new ServiceSnapshot(uid, name, ns, type, labels);
+        return new ServiceSnapshot(uid, name, ns, type, labels,
+                svc.getMetadata() == null ? null : svc.getMetadata().getResourceVersion(), JSON.serialize(svc));
     }
 
     private static PodSnapshot toPodSnapshot(V1Pod pod) {

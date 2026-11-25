@@ -9,6 +9,10 @@ import java.util.UUID;
 public interface KubernetesDeploymentEventRepository
         extends JpaRepository<KubernetesDeploymentEventEntity, UUID> {
 
+    boolean existsByDeploymentOperationIdAndWorkspaceIdAndEventType(
+            UUID deploymentOperationId, UUID workspaceId, String eventType
+    );
+
     List<KubernetesDeploymentEventEntity> findAllByDeploymentOperationIdAndWorkspaceIdOrderByOccurredAtAscCreatedAtAsc(
             UUID deploymentOperationId,
             UUID workspaceId
