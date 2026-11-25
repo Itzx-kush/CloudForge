@@ -2,6 +2,10 @@ package com.cloudforge.worker.k8s;
 
 import com.cloudforge.worker.client.ControlPlaneClient;
 import com.cloudforge.worker.executor.IsolatedExecutionAdapter;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.kubernetes.client.custom.Quantity;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -10,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -21,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * and marks success ONLY after replica readiness AND deployed immutable digest are verified.
  */
 public class KubernetesDeploymentExecutor {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final KubernetesApiClient k8sClient;
     private final long pollIntervalMs;
@@ -65,6 +72,11 @@ public class KubernetesDeploymentExecutor {
                         "Deployment cancelled before Kubernetes API apply", startedAt);
             }
 
+            var release = descriptor.releaseExecution();
+            if (release != null && "RECONCILIATION".equals(release.kind())) {
+                return observe(descriptor, clusterCtx, manifests, statusReporter, startedAt);
+            }
+
             // 2. Verify required RBAC permissions in target namespace before writing
             boolean canPatchDeploy = k8sClient.checkSelfSubjectAccess(
                     clusterCtx, descriptor.namespaceName(), "apps", "deployments", "patch"
@@ -105,6 +117,21 @@ public class KubernetesDeploymentExecutor {
                         "Deployment cancelled prior to applying Kubernetes manifests", startedAt);
             }
 
+            if (release != null && !matchesRollbackGuard(release, existingDeploy.orElse(null), existingSvc.orElse(null))) {
+                return new DeploymentExecutionOutcome("RECONCILIATION_REQUIRED", "K8S_RECONCILIATION_REQUIRED",
+                        false, 0, 0, 0, 0, null, null, null, null, List.of(), List.of(),
+                        "The live workload differs from the recorded current release. Inspect it before rollback.",
+                        startedAt, Instant.now());
+            }
+
+            String deploymentManifest = guardedManifest(manifests.deploymentJson(),
+                    existingDeploy.map(KubernetesApiClient.DeploymentSnapshot::uid).orElse(null),
+                    existingDeploy.map(KubernetesApiClient.DeploymentSnapshot::resourceVersion).orElse(null),
+                    release == null ? null : descriptor.deploymentOperationId().toString());
+            String serviceManifest = guardedManifest(manifests.serviceJson(),
+                    existingSvc.map(KubernetesApiClient.ServiceSnapshot::uid).orElse(null),
+                    existingSvc.map(KubernetesApiClient.ServiceSnapshot::resourceVersion).orElse(null), null);
+
             // 4. Mark APPLYING (applyInitiated=true) BEFORE issuing Kubernetes write API calls
             applyInitiated = true;
             statusReporter.report(
@@ -118,13 +145,19 @@ public class KubernetesDeploymentExecutor {
                     Instant.now());
 
             KubernetesApiClient.DeploymentSnapshot appliedDeploy = k8sClient.applyDeployment(
-                    clusterCtx, descriptor.namespaceName(), descriptor.deploymentName(), manifests.deploymentJson()
+                    clusterCtx, descriptor.namespaceName(), descriptor.deploymentName(), deploymentManifest
             );
             deploymentUid = appliedDeploy.uid();
             lastSnapshot = appliedDeploy;
 
+            if (cancelSignal.get()) {
+                return cancelled(true, lastSnapshot, deploymentUid, null, List.of(), List.of(),
+                        "Cancellation received before Service apply", startedAt);
+            }
+            statusReporter.report("APPLYING", true, 0, 0, 0, 0, null, deploymentUid, null,
+                    List.of(), List.of(), "Rechecking the active lease before applying the Service");
             KubernetesApiClient.ServiceSnapshot appliedSvc = k8sClient.applyService(
-                    clusterCtx, descriptor.namespaceName(), descriptor.serviceName(), manifests.serviceJson()
+                    clusterCtx, descriptor.namespaceName(), descriptor.serviceName(), serviceManifest
             );
             serviceUid = appliedSvc.uid();
 
@@ -146,6 +179,7 @@ public class KubernetesDeploymentExecutor {
             // 5. Poll rollout status, pods, and warning events until verified ready, failed, cancelled, or timed out
             int lastReportedReady = -1;
             int lastReportedUpdated = -1;
+            boolean verifying = false;
             while (true) {
                 if (cancelSignal.get()) {
                     Optional<KubernetesApiClient.DeploymentSnapshot> finalSnap =
@@ -183,6 +217,11 @@ public class KubernetesDeploymentExecutor {
                                 "K8S_RECONCILIATION_REQUIRED", 404,
                                 "Deployment \"" + descriptor.deploymentName() + "\" disappeared during rollout observation"
                         ));
+                if (release != null && (!Objects.equals(deploymentUid, snap.uid()) || targetGeneration != snap.generation()
+                        || !isOwnedByCloudForge(snap.labels(), descriptor))) {
+                    return failed("K8S_RECONCILIATION_REQUIRED", true, snap, deploymentUid, serviceUid,
+                            toConditionMaps(snap.conditions()), List.of(), "Rollback workload changed during rollout", startedAt);
+                }
                 lastSnapshot = snap;
                 deploymentUid = snap.uid() != null ? snap.uid() : deploymentUid;
                 lastConditions = toConditionMaps(snap.conditions());
@@ -211,7 +250,7 @@ public class KubernetesDeploymentExecutor {
                     lastReportedReady = snap.readyReplicas();
                     lastReportedUpdated = snap.updatedReplicas();
                     statusReporter.report(
-                            "ROLLING_OUT", true,
+                            verifying ? "VERIFYING" : "ROLLING_OUT", true,
                             snap.statusReplicas(), snap.updatedReplicas(),
                             snap.readyReplicas(), snap.availableReplicas(),
                             snap.observedGeneration(), deploymentUid, serviceUid,
@@ -227,6 +266,7 @@ public class KubernetesDeploymentExecutor {
 
                 // Check if rollout has converged to desired replicas & generation
                 if (isRolloutConverged(snap, targetGeneration, descriptor.replicaCount())) {
+                    verifying = true;
                     statusReporter.report(
                             "VERIFYING", true,
                             snap.statusReplicas(), snap.updatedReplicas(),
@@ -238,6 +278,16 @@ public class KubernetesDeploymentExecutor {
 
                     String verifiedDigest = verifyRunningImageDigestAndReadiness(snap, pods, descriptor);
                     if (verifiedDigest != null) {
+                        if (release != null) {
+                            var verifiedService = k8sClient.getService(clusterCtx, descriptor.namespaceName(), descriptor.serviceName());
+                            if (verifiedService.isEmpty() || !Objects.equals(serviceUid, verifiedService.get().uid())
+                                    || !isOwnedByCloudForge(verifiedService.get().labels(), descriptor)
+                                    || !matchesResourceSpec(serviceManifest, verifiedService.get().resourceJson())
+                                    || !matchesResourceSpec(deploymentManifest, snap.resourceJson())) {
+                                return failed("K8S_RECONCILIATION_REQUIRED", true, snap, deploymentUid, serviceUid,
+                                        lastConditions, lastPodDiagnostics, "The restored workload differs from the approved manifest", startedAt);
+                            }
+                        }
                         logConsumer.accept("SYSTEM",
                                 "[CloudForge K8s] Rollout verified healthy: " + snap.readyReplicas()
                                         + "/" + descriptor.replicaCount() + " replicas ready running " + verifiedDigest,
@@ -315,6 +365,119 @@ public class KubernetesDeploymentExecutor {
         }
     }
 
+    private DeploymentExecutionOutcome observe(
+            ControlPlaneClient.KubernetesExecutionDescriptor descriptor,
+            KubernetesApiClient.ClusterConnectionContext cluster,
+            KubernetesManifestBuilder.BuiltManifests manifests,
+            StatusReporter reporter, Instant started
+    ) throws Exception {
+        var deployment = k8sClient.getDeployment(cluster, descriptor.namespaceName(), descriptor.deploymentName()).orElse(null);
+        var service = k8sClient.getService(cluster, descriptor.namespaceName(), descriptor.serviceName()).orElse(null);
+        if (deployment == null || service == null || !isOwnedByCloudForge(deployment.labels(), descriptor)
+                || !isOwnedByCloudForge(service.labels(), descriptor)) {
+            return failed("K8S_RECONCILIATION_REQUIRED", false, deployment, null, null, List.of(), List.of(),
+                    "Expected managed Deployment or Service is missing or has different ownership", started);
+        }
+        var pods = k8sClient.listDeploymentPods(cluster, descriptor.namespaceName(), manifests.selectorLabels());
+        var conditions = toConditionMaps(deployment.conditions());
+        var diagnostics = toPodDiagnosticMaps(pods);
+        reporter.report("VERIFYING", false, deployment.statusReplicas(), deployment.updatedReplicas(),
+                deployment.readyReplicas(), deployment.availableReplicas(), deployment.observedGeneration(),
+                deployment.uid(), service.uid(), conditions, diagnostics, "Verifying live workload without modifying resources");
+        var digest = verifyRunningImageDigestAndReadiness(deployment, pods, descriptor);
+        if (digest == null || !isRolloutConverged(deployment, deployment.generation(), descriptor.replicaCount())
+                || !matchesResourceSpec(manifests.deploymentJson(), deployment.resourceJson())
+                || !matchesResourceSpec(manifests.serviceJson(), service.resourceJson())) {
+            return failed("K8S_RECONCILIATION_REQUIRED", false, deployment, deployment.uid(), service.uid(),
+                    conditions, diagnostics, "Live state does not match the selected healthy release", started);
+        }
+        return new DeploymentExecutionOutcome("SUCCEEDED", "NONE", false, deployment.statusReplicas(),
+                deployment.updatedReplicas(), deployment.readyReplicas(), deployment.availableReplicas(),
+                deployment.observedGeneration(), deployment.uid(), service.uid(), digest, conditions, diagnostics,
+                "Observed verified live workload without modifying resources", started, Instant.now());
+    }
+
+    private static boolean matchesRollbackGuard(
+            ControlPlaneClient.KubernetesReleaseExecution guard, KubernetesApiClient.DeploymentSnapshot deployment,
+            KubernetesApiClient.ServiceSnapshot service
+    ) {
+        return deployment != null && service != null
+                && guard.expectedDeploymentUid().equals(deployment.uid()) && guard.expectedServiceUid().equals(service.uid())
+                && guard.expectedGeneration() == deployment.generation()
+                && guard.expectedGeneration() == deployment.observedGeneration()
+                && List.of(guard.expectedImage()).equals(deployment.containerImages())
+                && deployment.specReplicas() > 0
+                && isRolloutConverged(deployment, deployment.generation(), deployment.specReplicas())
+                && deployment.resourceVersion() != null && !deployment.resourceVersion().isBlank()
+                && service.resourceVersion() != null && !service.resourceVersion().isBlank();
+    }
+
+    private static String guardedManifest(String manifest, String uid, String version, String rollbackId) throws Exception {
+        if (version == null && rollbackId == null) {
+            return manifest;
+        }
+        var resource = (ObjectNode) JSON.readTree(manifest);
+        if (version != null) {
+            var metadata = (ObjectNode) resource.get("metadata");
+            metadata.put("resourceVersion", version);
+            metadata.put("uid", uid);
+        }
+        if (rollbackId != null) {
+            var template = resource.at("/spec/template");
+            ((ObjectNode) template.at("/metadata/annotations")).put("cloudforge.io/rollback-operation", rollbackId);
+            ((ObjectNode) template.at("/spec/containers/0")).put("imagePullPolicy", "Always");
+        }
+        return JSON.writeValueAsString(resource);
+    }
+
+    private static boolean matchesResourceSpec(String expected, String observed) throws Exception {
+        if (observed == null) {
+            return false;
+        }
+        var desired = JSON.readTree(expected);
+        var actual = JSON.readTree(observed);
+        return containsManagedFields("", desired.path("spec"), actual.path("spec"));
+    }
+
+    private static boolean containsManagedFields(String key, JsonNode desired, JsonNode actual) {
+        if (desired.isObject()) {
+            var fields = desired.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                if (!containsManagedFields(field.getKey(), field.getValue(), actual.path(field.getKey()))) {
+                    return false;
+                }
+            }
+            return actual.isObject();
+        }
+        if (desired.isArray()) {
+            if (!actual.isArray() || desired.size() != actual.size()) {
+                return false;
+            }
+            for (int i = 0; i < desired.size(); i++) {
+                if (!containsManagedFields(key, desired.get(i), actual.get(i))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        // Kubernetes omits these zero-valued fields when serializing a Pod or a probe.
+        if (actual.isMissingNode()
+                && ((List.of("hostIPC", "hostNetwork", "hostPID").contains(key)
+                        && desired.isBoolean() && !desired.booleanValue())
+                    || ("initialDelaySeconds".equals(key) && desired.isIntegralNumber() && desired.intValue() == 0))) {
+            return true;
+        }
+        if (("cpu".equals(key) || "memory".equals(key)) && desired.isTextual() && actual.isTextual()) {
+            return Quantity.fromString(desired.asText()).getNumber().compareTo(Quantity.fromString(actual.asText()).getNumber()) == 0;
+        }
+        if ("imagePullPolicy".equals(key) && "IfNotPresent".equals(desired.asText())) {
+            return "IfNotPresent".equals(actual.asText()) || "Always".equals(actual.asText());
+        }
+        return desired.equals(actual)
+                || ((desired.isTextual() && actual.isIntegralNumber()) && desired.asText().equals(actual.asText()));
+    }
+
     private static boolean isOwnedByCloudForge(
             Map<String, String> labels,
             ControlPlaneClient.KubernetesExecutionDescriptor descriptor
@@ -368,7 +531,7 @@ public class KubernetesDeploymentExecutor {
         String expectedDigest = descriptor.manifestDigest().toLowerCase(Locale.ROOT);
         boolean deploymentSpecMatches = snap.containerImages() != null
                 && snap.containerImages().stream()
-                .anyMatch(img -> img != null && img.toLowerCase(Locale.ROOT).contains(expectedDigest));
+                .anyMatch(img -> descriptor.immutableImageReference().equals(img));
         if (!deploymentSpecMatches) {
             return null;
         }
@@ -379,8 +542,8 @@ public class KubernetesDeploymentExecutor {
             }
             boolean podMatches = pod.containerStatuses().stream().allMatch(cs ->
                     cs.ready() && (
-                            (cs.image() != null && cs.image().toLowerCase(Locale.ROOT).contains(expectedDigest))
-                                    || (cs.imageId() != null && cs.imageId().toLowerCase(Locale.ROOT).contains(expectedDigest))
+                            (cs.image() != null && cs.image().toLowerCase(Locale.ROOT).endsWith("@" + expectedDigest))
+                                    || (cs.imageId() != null && cs.imageId().toLowerCase(Locale.ROOT).endsWith(expectedDigest))
                     )
             );
             if (podMatches) {
@@ -567,7 +730,7 @@ public class KubernetesDeploymentExecutor {
             Instant startedAt
     ) {
         return new DeploymentExecutionOutcome(
-                "CANCELLED",
+                applyInitiated ? "RECONCILIATION_REQUIRED" : "CANCELLED",
                 "CANCELLED",
                 applyInitiated,
                 snap != null ? snap.statusReplicas() : 0,

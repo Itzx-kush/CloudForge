@@ -101,10 +101,11 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.6
 
 ---
 
-## Phase 3.7 — Hardened Multi-Tenant Sandboxing, Deployment History & Rollback (**Planned**)
+## Phase 3.7 — Release History, Rollback & Recovery
 
-- [ ] **MicroVM / Hardened Sandbox Isolation:** Introduce gVisor / Kata / Firecracker sandboxed execution before permitting hostile/untrusted multi-tenant repository builds.
-- [ ] **Phase 3.7 — Release Revision History & Rollback:** Build on the immutable Phase 3.6 deployment evidence (`kubernetes_deployment_operations`: commit SHA, `@sha256:` image digest, manifest SHA-256 checksum, config snapshot, actor, outcome) to provide audited, one-click rollback and release diffing to previously verified healthy revisions.
+- [x] **Release revisions and comparison:** Numbered deployment history, immutable artifact references, structured workload diffs, and workspace-scoped views.
+- [x] **Verified rollback and recovery:** Fenced rollback operations, production approval, read-only reconciliation, and release timeline. See [Phase 3.7](PHASE3_7_RELEASE_HISTORY_ROLLBACK.md) and the [Phase 3 assessment](PHASE3_COMPLETION_REPORT.md).
+- [ ] **Production hardening:** Evaluate hardened worker isolation such as gVisor, Kata, or Firecracker before permitting untrusted multi-tenant repository builds.
 
 ---
 

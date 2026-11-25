@@ -72,6 +72,7 @@ import type {
 import '../components/OciArtifactsPanel.css';
 import './Pages.css';
 import './DeploymentsPage.css';
+import { ReleaseHistoryPanel } from './ReleaseHistoryPanel';
 
 const DEPLOYMENT_STATUS_META: Record<
   KubernetesDeploymentStatus,
@@ -118,7 +119,7 @@ export function DeploymentsPage() {
   const isOwner = activeRole === 'OWNER';
   const canRequestDeployments = activeRole === 'OWNER' || activeRole === 'DEVELOPER';
 
-  const [activeTab, setActiveTab] = useState<'deployments' | 'clusters'>('deployments');
+  const [activeTab, setActiveTab] = useState<'deployments' | 'clusters' | 'releases'>('deployments');
   const [subsystemStatus, setSubsystemStatus] = useState<KubernetesSubsystemStatus | null>(null);
   const [clusters, setClusters] = useState<KubernetesClusterConnection[]>([]);
   const [namespaces, setNamespaces] = useState<KubernetesNamespaceBinding[]>([]);
@@ -1035,8 +1036,8 @@ export function DeploymentsPage() {
       description="Secure Kubernetes deployment console for approved clusters, isolated namespaces, and immutable digest-verified rolling updates."
       phaseBadge={{
         label: subsystemStatus?.kubernetesEnabled
-          ? 'Phase 3.6 · Kubernetes Engine Active'
-          : 'Phase 3.6 · Kubernetes Engine (Safe Default)',
+          ? 'Kubernetes Engine Active'
+          : 'Kubernetes Engine Disabled',
         tone: subsystemStatus?.kubernetesEnabled ? 'healthy' : 'info',
       }}
       actions={
@@ -1190,6 +1191,16 @@ export function DeploymentsPage() {
               <button
                 type="button"
                 role="tab"
+                aria-selected={activeTab === 'releases'}
+                className={`cf-k8s-tab ${activeTab === 'releases' ? 'cf-k8s-tab--active' : ''}`}
+                onClick={() => setActiveTab('releases')}
+              >
+                <Layers size={14} aria-hidden="true" />
+                <span>Release History</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={activeTab === 'clusters'}
                 className={`cf-k8s-tab ${activeTab === 'clusters' ? 'cf-k8s-tab--active' : ''}`}
                 onClick={() => setActiveTab('clusters')}
@@ -1200,10 +1211,20 @@ export function DeploymentsPage() {
               </button>
             </div>
 
-            {activeTab === 'deployments' ? (
+            {activeTab === 'releases' && activeWorkspace ? (
+              <ReleaseHistoryPanel
+                key={activeWorkspace.id}
+                workspace={activeWorkspace.id}
+                isOwner={isOwner}
+                canRequest={canRequestDeployments}
+                executionAvailable={Boolean(subsystemStatus?.kubernetesEnabled && subsystemStatus.activeDeployWorkers)}
+                projects={projects}
+                clusters={clusters}
+              />
+            ) : activeTab === 'deployments' ? (
               <DashboardCard
                 title="Kubernetes Deployment Operations"
-                subtitle="Immutable digest-verified rolling updates persisted with manifest checksums and live rollout evidence (Phase 3.7 rollback-ready)"
+                subtitle="Immutable digest-verified rolling updates persisted with manifest checksums and live rollout evidence"
                 icon={<Rocket size={17} />}
                 headerAction={
                   <StatusBadge
@@ -2130,10 +2151,8 @@ export function DeploymentsPage() {
                 <div style={{ flex: 1 }}>
                   <p className="cf-notice__title">Confirm Deployment Cancellation</p>
                   <p className="cf-notice__text">
-                    Cancelling halts further worker writes and marks the operation Cancelled or
-                    Reconciliation Required if Kubernetes apply already began. CloudForge does not
-                    delete workloads or perform automatic rollback in Phase 3.6 (planned for Phase
-                    3.7).
+                    Cancelling stops further worker writes. If Kubernetes apply already began,
+                    inspect the live workload from Release History before requesting another change.
                   </p>
                   <div className="cf-inline-actions" style={{ marginTop: '8px' }}>
                     <button

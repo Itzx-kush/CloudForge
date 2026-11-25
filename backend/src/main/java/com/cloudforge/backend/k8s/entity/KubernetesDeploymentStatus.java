@@ -41,7 +41,7 @@ public enum KubernetesDeploymentStatus {
         }
         Set<KubernetesDeploymentStatus> allowed = switch (this) {
             case PENDING -> EnumSet.of(VALIDATING, FAILED, CANCELLED, RECONCILIATION_REQUIRED);
-            case VALIDATING -> EnumSet.of(APPLYING, FAILED, CANCELLED, RECONCILIATION_REQUIRED);
+            case VALIDATING -> EnumSet.of(APPLYING, VERIFYING, FAILED, CANCELLED, RECONCILIATION_REQUIRED);
             case APPLYING -> EnumSet.of(ROLLING_OUT, VERIFYING, FAILED, CANCELLED, RECONCILIATION_REQUIRED);
             case ROLLING_OUT -> EnumSet.of(VERIFYING, FAILED, CANCELLED, RECONCILIATION_REQUIRED);
             case VERIFYING -> EnumSet.of(SUCCEEDED, FAILED, CANCELLED, RECONCILIATION_REQUIRED);

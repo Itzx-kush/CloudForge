@@ -240,3 +240,7 @@ All automated test suites, production builds, live PostgreSQL 17 migration/query
 - **Live CNI `NetworkPolicy` Verification (`kube-router`):**
   - Unauthorized cross-namespace pod (`cf-phase36-unauth-probe/cloudforge-netpol-probe`) -> `http://10.43.38.46:80/status/200`: **BLOCKED** (`exit=1`, `Connection refused`).
   - Authorized same-namespace pod (`cf-phase36-e2e-dev/cloudforge-netpol-probe`) -> `http://10.43.38.46:80/status/200`: **PERMITTED** (`exit=0`, `HTTP/1.1 200 OK`).
+
+## Release history and rollback
+
+Use the [Phase 3.7 runbook](PHASE3_7_RELEASE_HISTORY_ROLLBACK.md) for release revision history, permissions, reconciliation, and disposable-cluster verification. Run matching control-plane and Kubernetes worker builds when verifying release operations.

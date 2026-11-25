@@ -375,6 +375,46 @@ class KubernetesClientAndExecutorTest {
         assertThat(uploadedLogs).noneSatisfy(entry -> assertThat(entry.message()).contains(ephemeralSaToken));
     }
 
+    @Test
+    void observesTheSelectedReleaseWithoutWritesAndRejectsStaleRollback() {
+        var base = KubernetesManifestAndSecurityTest.validDescriptor(null);
+        var manifests = KubernetesManifestBuilder.buildAndVerify(base);
+        var ctx = new KubernetesApiClient.ClusterConnectionContext(
+                "https://127.0.0.1:16443", "PEM", "test".toCharArray(), true, 10);
+        var stub = new StubKubernetesApiClient();
+        stub.pollCount = 1;
+        stub.liveDeployment = new KubernetesApiClient.DeploymentSnapshot("live-dep", base.deploymentName(),
+                base.namespaceName(), 2, 2, 2, 2, 2, 2, 2, manifests.selectorLabels(),
+                List.of(base.immutableImageReference()),
+                List.of(new KubernetesApiClient.DeploymentConditionInfo("Available", "True", "Ready", "Ready")),
+                "42", manifests.deploymentJson()
+                        .replace("\"hostIPC\":false,", "")
+                        .replace("\"hostNetwork\":false,", "")
+                        .replace("\"hostPID\":false,", ""));
+        stub.liveService = new KubernetesApiClient.ServiceSnapshot("live-svc", base.serviceName(),
+                base.namespaceName(), "ClusterIP", manifests.selectorLabels(), "43", manifests.serviceJson());
+
+        var readOnly = new ControlPlaneClient.KubernetesReleaseExecution("RECONCILIATION",
+                base.immutableImageReference(), null, null, null);
+        var descriptor = KubernetesManifestAndSecurityTest.forRelease(base, base.immutableImageReference(),
+                base.manifestDigest(), "RECONCILIATION:" + manifests.manifestChecksumSha256(), readOnly);
+        var executor = new KubernetesDeploymentExecutor(stub, 50);
+        var result = executor.execute(descriptor, ctx, (st, apply, o, u, r, a, g, d, s, c, p, m) ->
+                assertThat(apply).isFalse(), new AtomicBoolean(false), (stream, message, time) -> {});
+        assertThat(result.deploymentStatus()).isEqualTo("SUCCEEDED");
+        assertThat(result.verifiedImageDigest()).isEqualTo(base.manifestDigest());
+        assertThat(stub.applied).isFalse();
+
+        var stale = new ControlPlaneClient.KubernetesReleaseExecution("ROLLBACK",
+                base.immutableImageReference(), "live-dep", "live-svc", 1L);
+        var staleDescriptor = KubernetesManifestAndSecurityTest.forRelease(base, base.immutableImageReference(),
+                base.manifestDigest(), "ROLLBACK:" + manifests.manifestChecksumSha256(), stale);
+        var denied = executor.execute(staleDescriptor, ctx, (st, apply, o, u, r, a, g, d, s, c, p, m) ->
+                assertThat(apply).isFalse(), new AtomicBoolean(false), (stream, message, time) -> {});
+        assertThat(denied.deploymentStatus()).isEqualTo("RECONCILIATION_REQUIRED");
+        assertThat(stub.applied).isFalse();
+    }
+
     private static final class StubKubernetesApiClient implements KubernetesApiClient {
         boolean allowClusterAdmin = false;
         boolean allowDeployments = true;
@@ -389,6 +429,8 @@ class KubernetesClientAndExecutorTest {
         String leakedTokenInEvent = null;
         Runnable onApply = null;
         boolean applied = false;
+        DeploymentSnapshot liveDeployment;
+        ServiceSnapshot liveService;
 
         @Override
         public ServerVersionInfo getServerVersion(ClusterConnectionContext ctx) {
@@ -422,6 +464,9 @@ class KubernetesClientAndExecutorTest {
 
         @Override
         public Optional<DeploymentSnapshot> getDeployment(ClusterConnectionContext ctx, String namespace, String name) {
+            if (liveDeployment != null) {
+                return Optional.of(liveDeployment);
+            }
             if (!applied) {
                 if (existingDeploymentLabels != null) {
                     return Optional.of(new DeploymentSnapshot("uid-foreign", name, namespace, 1, 1, 1, 1, 1, 1, 1,
@@ -458,7 +503,7 @@ class KubernetesClientAndExecutorTest {
 
         @Override
         public Optional<ServiceSnapshot> getService(ClusterConnectionContext ctx, String namespace, String name) {
-            return Optional.empty();
+            return Optional.ofNullable(liveService);
         }
 
         @Override

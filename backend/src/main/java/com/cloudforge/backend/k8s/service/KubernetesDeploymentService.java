@@ -26,6 +26,7 @@ import com.cloudforge.backend.k8s.entity.KubernetesClusterStatus;
 import com.cloudforge.backend.k8s.entity.KubernetesDeploymentConfigEntity;
 import com.cloudforge.backend.k8s.entity.KubernetesDeploymentOperationEntity;
 import com.cloudforge.backend.k8s.entity.KubernetesDeploymentStatus;
+import com.cloudforge.backend.k8s.entity.KubernetesOperationKind;
 import com.cloudforge.backend.k8s.entity.KubernetesNamespaceBindingEntity;
 import com.cloudforge.backend.k8s.entity.KubernetesNamespaceBindingStatus;
 import com.cloudforge.backend.k8s.repository.KubernetesClusterConnectionRepository;
@@ -52,6 +53,7 @@ import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepositor
 import com.cloudforge.backend.orchestration.service.PipelineOrchestrationService;
 import com.cloudforge.backend.repository.ProjectEnvironmentRepository;
 import com.cloudforge.backend.repository.ProjectRepository;
+import com.cloudforge.backend.repository.WorkspaceRepository;
 import com.cloudforge.backend.service.AuditService;
 import com.cloudforge.backend.service.WorkspaceAuthorizationService;
 import com.cloudforge.backend.worker.entity.AllowedWorkerOperation;
@@ -106,6 +108,7 @@ public class KubernetesDeploymentService {
     private final KubernetesDeploymentLifecycleService lifecycleService;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
+    private final WorkspaceRepository workspaceRepository;
 
     public KubernetesDeploymentService(
             WorkspaceAuthorizationService authorizationService,
@@ -128,7 +131,8 @@ public class KubernetesDeploymentService {
             ClusterSecurityValidator clusterSecurityValidator,
             KubernetesDeploymentLifecycleService lifecycleService,
             AuditService auditService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            WorkspaceRepository workspaceRepository
     ) {
         this.authorizationService = authorizationService;
         this.k8sProperties = k8sProperties;
@@ -151,6 +155,7 @@ public class KubernetesDeploymentService {
         this.lifecycleService = lifecycleService;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
+        this.workspaceRepository = workspaceRepository;
     }
 
     @Transactional(readOnly = true)
@@ -212,8 +217,17 @@ public class KubernetesDeploymentService {
             String headerIdempotencyKey,
             UserEntity actor
     ) {
+        return queueDeployment(workspaceId, request, headerIdempotencyKey, actor, null);
+    }
+
+    @Transactional
+    public CreateDeploymentResult queueDeployment(
+            UUID workspaceId, CreateDeploymentRequest request, String headerIdempotencyKey,
+            UserEntity actor, ReleaseOperation release
+    ) {
         WorkspaceMemberEntity membership = authorizationService.requireDeveloperOrAbove(workspaceId, actor.getId());
-        WorkspaceEntity workspace = membership.getWorkspace();
+        WorkspaceEntity workspace = workspaceRepository.lockForDeploymentRequest(workspaceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Workspace not found"));
 
         String rawIdemKey = StringUtils.hasText(headerIdempotencyKey)
                 ? headerIdempotencyKey.trim()
@@ -248,7 +262,7 @@ public class KubernetesDeploymentService {
         // 3. Enforce environment & production deployment authorization policy
         boolean isProductionTarget = environment.getEnvironmentType() == EnvironmentType.PRODUCTION
                 || cluster.getEnvironmentCategory() == EnvironmentType.PRODUCTION;
-        if (isProductionTarget) {
+        if (isProductionTarget && (release == null || release.kind() == KubernetesOperationKind.ROLLBACK)) {
             if (membership.getRole() != WorkspaceRole.OWNER) {
                 throw new ForbiddenOperationException(
                         "Only workspace OWNER users may request deployments targeting PRODUCTION environments or clusters"
@@ -259,7 +273,7 @@ public class KubernetesDeploymentService {
                         "Production Kubernetes deployments are disabled by platform policy (CLOUDFORGE_K8S_ALLOW_PRODUCTION_DEPLOYMENTS=false)"
                 );
             }
-            if (cluster.isProductionApprovalRequired()) {
+            if (cluster.isProductionApprovalRequired() || release != null) {
                 if (!Boolean.TRUE.equals(request.productionApprovalConfirmed())
                         || !StringUtils.hasText(request.productionApprovalJustification())
                         || request.productionApprovalJustification().trim().length() < 8) {
@@ -316,6 +330,12 @@ public class KubernetesDeploymentService {
                 namespaceBinding.getId(), artifact.getId(), validatedCfg.configChecksumSha256()
         );
 
+        if (release != null) {
+            fingerprint = KubernetesDeploymentConfigValidator.sha256Hex(fingerprint + "|" + release.kind() + "|"
+                    + release.target().getId() + "|" + release.expectedOperationId() + "|" + release.reason()
+                    + "|" + request.productionApprovalConfirmed());
+        }
+
         // 7. Handle workspace-scoped idempotent replay
         if (rawIdemKey != null) {
             Optional<KubernetesDeploymentOperationEntity> existingOpt =
@@ -347,44 +367,75 @@ public class KubernetesDeploymentService {
             );
         }
 
-        // 9. Upsert declarative deployment configuration record
-        KubernetesDeploymentConfigEntity cfgEntity = deploymentConfigRepository
-                .findByWorkspaceIdAndProjectIdAndEnvironmentIdAndClusterConnectionIdAndDeploymentName(
-                        workspaceId, project.getId(), environment.getId(), cluster.getId(), validatedCfg.deploymentName()
-                )
-                .orElseGet(() -> {
-                    KubernetesDeploymentConfigEntity created = new KubernetesDeploymentConfigEntity();
-                    created.setWorkspace(workspace);
-                    created.setProject(project);
-                    created.setEnvironment(environment);
-                    created.setClusterConnection(cluster);
-                    created.setNamespaceBinding(namespaceBinding);
-                    created.setCreatedBy(actor);
-                    return created;
-                });
-        cfgEntity.setNamespaceName(namespaceBinding.getNamespaceName());
-        cfgEntity.setDeploymentName(validatedCfg.deploymentName());
-        cfgEntity.setServiceName(validatedCfg.serviceName());
-        cfgEntity.setReplicaCount(validatedCfg.replicaCount());
-        cfgEntity.setContainerPort(validatedCfg.containerPort());
-        cfgEntity.setServicePort(validatedCfg.servicePort());
-        cfgEntity.setCpuRequest(validatedCfg.cpuRequest());
-        cfgEntity.setCpuLimit(validatedCfg.cpuLimit());
-        cfgEntity.setMemoryRequest(validatedCfg.memoryRequest());
-        cfgEntity.setMemoryLimit(validatedCfg.memoryLimit());
-        cfgEntity.setReadinessProbeJson(validatedCfg.readinessProbeJson());
-        cfgEntity.setLivenessProbeJson(validatedCfg.livenessProbeJson());
-        cfgEntity.setStartupProbeJson(validatedCfg.startupProbeJson());
-        cfgEntity.setRollingMaxSurge(validatedCfg.rollingMaxSurge());
-        cfgEntity.setRollingMaxUnavailable(validatedCfg.rollingMaxUnavailable());
-        cfgEntity.setProgressDeadlineSeconds(validatedCfg.progressDeadlineSeconds());
-        cfgEntity.setDeploymentTimeoutSeconds(validatedCfg.deploymentTimeoutSeconds());
-        cfgEntity.setReadOnlyRootFilesystem(validatedCfg.readOnlyRootFilesystem());
-        cfgEntity.setRunAsNonRoot(validatedCfg.runAsNonRoot());
-        cfgEntity.setRunAsUser(validatedCfg.runAsUser());
-        cfgEntity.setConfigChecksumSha256(validatedCfg.configChecksumSha256());
-        cfgEntity.setUpdatedBy(actor);
-        KubernetesDeploymentConfigEntity savedCfg = deploymentConfigRepository.saveAndFlush(cfgEntity);
+        KubernetesDeploymentOperationEntity latest = latestTargetOperation(
+                cluster.getId(), namespaceBinding.getNamespaceName(), validatedCfg.deploymentName()).orElse(null);
+        if (release != null) {
+            if (latest == null || !latest.getId().equals(release.expectedOperationId())) {
+                throw new ConflictException("Deployment state changed. Refresh the release preview.");
+            }
+            if (release.kind() == KubernetesOperationKind.RECONCILIATION
+                    && !requiresReconciliation(latest)) {
+                throw new ConflictException("This deployment has no unresolved external state");
+            }
+            if (release.kind() == KubernetesOperationKind.ROLLBACK) {
+                if (requiresReconciliation(latest)) {
+                    throw new ConflictException("Reconcile the external deployment state before requesting rollback");
+                }
+                if (!isVerifiedObservation(release.current())
+                        || !ownsTarget(release.current(), release.target())) {
+                    throw new ConflictException("A verified current workload is required for rollback");
+                }
+            }
+        } else if (latest != null && requiresReconciliation(latest)) {
+            throw new ConflictException("Reconcile the external deployment state before requesting another deployment");
+        }
+
+        // 9. Use the historical config identity for release operations. Ordinary deployments update the saved config.
+        KubernetesDeploymentConfigEntity savedCfg;
+        if (release != null) {
+            savedCfg = release.target().getDeploymentConfig();
+            if (savedCfg == null) {
+                throw new ConflictException("The release has no workload configuration identity");
+            }
+        } else {
+            KubernetesDeploymentConfigEntity cfgEntity = deploymentConfigRepository
+                    .findByWorkspaceIdAndProjectIdAndEnvironmentIdAndClusterConnectionIdAndDeploymentName(
+                            workspaceId, project.getId(), environment.getId(), cluster.getId(), validatedCfg.deploymentName()
+                    )
+                    .orElseGet(() -> {
+                        KubernetesDeploymentConfigEntity created = new KubernetesDeploymentConfigEntity();
+                        created.setWorkspace(workspace);
+                        created.setProject(project);
+                        created.setEnvironment(environment);
+                        created.setClusterConnection(cluster);
+                        created.setNamespaceBinding(namespaceBinding);
+                        created.setCreatedBy(actor);
+                        return created;
+                    });
+            cfgEntity.setNamespaceName(namespaceBinding.getNamespaceName());
+            cfgEntity.setDeploymentName(validatedCfg.deploymentName());
+            cfgEntity.setServiceName(validatedCfg.serviceName());
+            cfgEntity.setReplicaCount(validatedCfg.replicaCount());
+            cfgEntity.setContainerPort(validatedCfg.containerPort());
+            cfgEntity.setServicePort(validatedCfg.servicePort());
+            cfgEntity.setCpuRequest(validatedCfg.cpuRequest());
+            cfgEntity.setCpuLimit(validatedCfg.cpuLimit());
+            cfgEntity.setMemoryRequest(validatedCfg.memoryRequest());
+            cfgEntity.setMemoryLimit(validatedCfg.memoryLimit());
+            cfgEntity.setReadinessProbeJson(validatedCfg.readinessProbeJson());
+            cfgEntity.setLivenessProbeJson(validatedCfg.livenessProbeJson());
+            cfgEntity.setStartupProbeJson(validatedCfg.startupProbeJson());
+            cfgEntity.setRollingMaxSurge(validatedCfg.rollingMaxSurge());
+            cfgEntity.setRollingMaxUnavailable(validatedCfg.rollingMaxUnavailable());
+            cfgEntity.setProgressDeadlineSeconds(validatedCfg.progressDeadlineSeconds());
+            cfgEntity.setDeploymentTimeoutSeconds(validatedCfg.deploymentTimeoutSeconds());
+            cfgEntity.setReadOnlyRootFilesystem(validatedCfg.readOnlyRootFilesystem());
+            cfgEntity.setRunAsNonRoot(validatedCfg.runAsNonRoot());
+            cfgEntity.setRunAsUser(validatedCfg.runAsUser());
+            cfgEntity.setConfigChecksumSha256(validatedCfg.configChecksumSha256());
+            cfgEntity.setUpdatedBy(actor);
+            savedCfg = deploymentConfigRepository.saveAndFlush(cfgEntity);
+        }
 
         // 10. Generate deterministic manifest checksum (Deployment + ClusterIP Service)
         KubernetesManifestGenerator.GeneratedManifestBundle manifestBundle = manifestGenerator.generate(
@@ -422,6 +473,11 @@ public class KubernetesDeploymentService {
                 )
         );
 
+        if (release != null && !manifestBundle.manifestChecksumSha256().equals(
+                release.target().getManifestChecksumSha256())) {
+            throw new ConflictException("Current policy cannot regenerate the historical workload checksum");
+        }
+
         // Mark referenced OCI artifact as retention-protected
         if (artifact.getRetentionPolicy() != OciArtifactRetentionPolicy.REFERENCED_PROTECTED) {
             artifact.setRetentionPolicy(OciArtifactRetentionPolicy.REFERENCED_PROTECTED);
@@ -436,10 +492,11 @@ public class KubernetesDeploymentService {
         run.setLinkedRepository(artifact.getLinkedRepository());
         run.setTargetEnvironment(environment);
         run.setRunNumber(1);
-        run.setDefinitionName("Kubernetes Deploy · " + validatedCfg.deploymentName());
+        run.setDefinitionName((release == null ? "Kubernetes Deploy"
+                : "Kubernetes " + release.kind().name()) + " · " + validatedCfg.deploymentName());
         run.setDefinitionVersion(1);
         run.setDefinitionSnapshotJson(writeJson(Map.of(
-                "type", "DIRECT_KUBERNETES_DEPLOYMENT",
+                "type", release == null ? "DIRECT_KUBERNETES_DEPLOYMENT" : release.kind().name(),
                 "clusterId", cluster.getId().toString(),
                 "namespace", namespaceBinding.getNamespaceName(),
                 "deploymentName", validatedCfg.deploymentName(),
@@ -516,7 +573,21 @@ public class KubernetesDeploymentService {
         op.setConfigSnapshotJson(validatedCfg.configSnapshotJson());
         op.setRequestedReplicas(validatedCfg.replicaCount());
         op.setRequestedBy(actor);
-        if (isProductionTarget) {
+        if (release != null) {
+            op.setOperationKind(release.kind());
+            op.setRestoredReleaseId(release.target().getId());
+            op.setExpectedOperationId(release.expectedOperationId());
+            if (release.current() != null) {
+                op.setGuardObservationId(release.current().getId());
+            }
+            op.setOperationReason(release.reason());
+        }
+        if (op.getOperationKind() != KubernetesOperationKind.RECONCILIATION) {
+            op.setRevisionNumber(deploymentOperationRepository.latestRevision(
+                    cluster.getId(), op.getNamespaceName(), op.getDeploymentName()) + 1);
+        }
+        if (isProductionTarget && Boolean.TRUE.equals(request.productionApprovalConfirmed())
+                && StringUtils.hasText(request.productionApprovalJustification())) {
             op.setProductionApprovalToken(request.productionApprovalJustification().trim());
             op.setProductionApprovedBy(actor);
             op.setProductionApprovedAt(now);
@@ -525,7 +596,7 @@ public class KubernetesDeploymentService {
 
         lifecycleService.recordDeploymentEvent(
                 savedOp,
-                "DEPLOYMENT_REQUESTED",
+                savedOp.getOperationKind().name() + "_REQUESTED",
                 null,
                 KubernetesDeploymentStatus.PENDING.name(),
                 "user:" + actor.getUsername(),
@@ -542,7 +613,7 @@ public class KubernetesDeploymentService {
         auditService.record(
                 workspace,
                 actor,
-                "KUBERNETES_DEPLOYMENT_REQUESTED",
+                "KUBERNETES_" + savedOp.getOperationKind().name() + "_REQUESTED",
                 "KUBERNETES_DEPLOYMENT",
                 savedOp.getId().toString(),
                 "Requested Kubernetes deployment \"" + savedOp.getDeploymentName() + "\" in "
@@ -555,12 +626,54 @@ public class KubernetesDeploymentService {
                         "namespace", savedOp.getNamespaceName(),
                         "artifactId", artifact.getId().toString(),
                         "manifestDigest", artifact.getManifestDigest(),
-                        "manifestChecksum", savedOp.getManifestChecksumSha256()
+                        "manifestChecksum", savedOp.getManifestChecksumSha256(),
+                        "restoredReleaseId", String.valueOf(savedOp.getRestoredReleaseId()),
+                        "productionApproved", savedOp.getProductionApprovedAt() != null,
+                        "reason", savedOp.getOperationReason() == null ? "" : savedOp.getOperationReason()
                 )
         );
 
         return new CreateDeploymentResult(lifecycleService.toOperationDto(savedOp), false);
     }
+
+    Optional<KubernetesDeploymentOperationEntity> latestTargetOperation(UUID cluster, String namespace, String name) {
+        return deploymentOperationRepository
+                .findFirstByClusterConnectionIdAndNamespaceNameAndDeploymentNameOrderByCreatedAtDescIdDesc(cluster, namespace, name);
+    }
+
+    static boolean ownsTarget(KubernetesDeploymentOperationEntity left, KubernetesDeploymentOperationEntity right) {
+        return left.getWorkspace().getId().equals(right.getWorkspace().getId())
+                && left.getProject().getId().equals(right.getProject().getId())
+                && left.getEnvironment().getId().equals(right.getEnvironment().getId())
+                && left.getClusterConnection().getId().equals(right.getClusterConnection().getId())
+                && left.getNamespaceBinding().getId().equals(right.getNamespaceBinding().getId())
+                && left.getNamespaceName().equals(right.getNamespaceName())
+                && left.getDeploymentName().equals(right.getDeploymentName());
+    }
+
+    static boolean requiresReconciliation(KubernetesDeploymentOperationEntity op) {
+        return op.getStatus() == KubernetesDeploymentStatus.RECONCILIATION_REQUIRED
+                || (op.getOperationKind() == KubernetesOperationKind.RECONCILIATION
+                    && op.getStatus() != KubernetesDeploymentStatus.SUCCEEDED)
+                || (op.isApplyInitiated() && op.getStatus() == KubernetesDeploymentStatus.FAILED);
+    }
+
+    static boolean isVerifiedObservation(KubernetesDeploymentOperationEntity op) {
+        return op != null && op.getStatus() == KubernetesDeploymentStatus.SUCCEEDED
+                && op.getObservedGeneration() != null && op.getObservedGeneration() > 0
+                && op.getRequestedReplicas() > 0 && op.getUpdatedReplicas() >= op.getRequestedReplicas()
+                && op.getReadyReplicas() >= op.getRequestedReplicas()
+                && op.getAvailableReplicas() >= op.getRequestedReplicas()
+                && StringUtils.hasText(op.getK8sDeploymentUid()) && StringUtils.hasText(op.getK8sServiceUid());
+    }
+
+    record ReleaseOperation(
+            KubernetesOperationKind kind,
+            KubernetesDeploymentOperationEntity target,
+            UUID expectedOperationId,
+            KubernetesDeploymentOperationEntity current,
+            String reason
+    ) {}
 
     @Transactional(readOnly = true)
     public PagedResponse<KubernetesDeploymentOperationDto> listDeployments(

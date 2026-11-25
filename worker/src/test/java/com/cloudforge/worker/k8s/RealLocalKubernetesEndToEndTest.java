@@ -101,6 +101,39 @@ class RealLocalKubernetesEndToEndTest {
         assertThat(healthyOutcome.k8sServiceUid()).isNotBlank();
         assertThat(transitions).contains("VALIDATING", "APPLYING", "ROLLING_OUT", "VERIFYING");
 
+        String secondImage = System.getenv("CLOUDFORGE_K8S_E2E_SECOND_IMAGE_REF");
+        if (secondImage != null) {
+            String secondDigest = secondImage.substring(secondImage.lastIndexOf('@') + 1);
+            assertThat(secondDigest).isNotEqualTo(digest);
+            var update = KubernetesManifestAndSecurityTest.forRelease(healthyDesc, secondImage, secondDigest, null, null);
+            var updated = executor.execute(update, ctx, (st, app, obs, upd, rdy, avail, gen, d, s, c, p, m) -> {},
+                    new AtomicBoolean(false), (stream, line, time) -> System.out.println("[K8S-UPDATE] " + line));
+            assertThat(updated.deploymentStatus()).withFailMessage(updated.summary()).isEqualTo("SUCCEEDED");
+            assertThat(updated.verifiedImageDigest()).isEqualTo(secondDigest);
+
+            var mode = new ControlPlaneClient.KubernetesReleaseExecution("ROLLBACK", secondImage,
+                    updated.k8sDeploymentUid(), updated.k8sServiceUid(), updated.observedGeneration());
+            String checksum = KubernetesManifestBuilder.buildAndVerify(healthyDesc).manifestChecksumSha256();
+            var rollback = KubernetesManifestAndSecurityTest.forRelease(healthyDesc, imageRef, digest, "ROLLBACK:" + checksum, mode);
+            var restored = executor.execute(rollback, ctx, (st, app, obs, upd, rdy, avail, gen, d, s, c, p, m) -> {},
+                    new AtomicBoolean(false), (stream, line, time) -> System.out.println("[K8S-ROLLBACK] " + line));
+            assertThat(restored.deploymentStatus()).withFailMessage(restored.summary()).isEqualTo("SUCCEEDED");
+            assertThat(restored.verifiedImageDigest()).isEqualTo(digest);
+            assertThat(restored.readyReplicas()).isEqualTo(2);
+            assertThat(restored.k8sDeploymentUid()).isEqualTo(updated.k8sDeploymentUid());
+            assertThat(client.getDeployment(ctx, namespace, healthyDesc.deploymentName()).orElseThrow().containerImages())
+                    .containsExactly(imageRef);
+
+            var readOnly = new ControlPlaneClient.KubernetesReleaseExecution("RECONCILIATION", imageRef, null, null, null);
+            var observation = KubernetesManifestAndSecurityTest.forRelease(healthyDesc, imageRef, digest,
+                    "RECONCILIATION:" + checksum, readOnly);
+            var observed = executor.execute(observation, ctx,
+                    (st, app, o, u, r, a, g, d, s, c, p, m) -> assertThat(app).isFalse(),
+                    new AtomicBoolean(false), (stream, line, time) -> {});
+            assertThat(observed.deploymentStatus()).withFailMessage(observed.summary()).isEqualTo("SUCCEEDED");
+            assertThat(observed.applyInitiated()).isFalse();
+        }
+
         // 3. Negative real-cluster test: nonexistent immutable digest triggers K8S_IMAGE_PULL_FAILED (never SUCCEEDED)
         String bogusDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
         String bogusRef = imageRef.substring(0, imageRef.indexOf('@')) + "@" + bogusDigest;

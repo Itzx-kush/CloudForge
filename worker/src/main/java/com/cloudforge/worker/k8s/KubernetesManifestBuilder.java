@@ -182,9 +182,10 @@ public final class KubernetesManifestBuilder {
             String canonicalBundleJson = CANONICAL_MAPPER.writeValueAsString(bundle);
             String computedChecksum = sha256Hex(canonicalBundleJson);
 
-            if (d.manifestChecksumSha256() != null
-                    && !d.manifestChecksumSha256().isBlank()
-                    && !d.manifestChecksumSha256().equalsIgnoreCase(computedChecksum)) {
+            String protocolChecksum = d.releaseExecution() == null
+                    ? computedChecksum : d.releaseExecution().kind() + ":" + computedChecksum;
+            if ((d.releaseExecution() != null || (d.manifestChecksumSha256() != null && !d.manifestChecksumSha256().isBlank()))
+                    && !protocolChecksum.equalsIgnoreCase(d.manifestChecksumSha256())) {
                 throw new ManifestPolicyException(
                         "Manifest checksum verification failed: expected " + d.manifestChecksumSha256()
                                 + " but computed " + computedChecksum
@@ -198,6 +199,19 @@ public final class KubernetesManifestBuilder {
     }
 
     public static void validateDescriptorSecurity(ControlPlaneClient.KubernetesExecutionDescriptor d) {
+        if (d.releaseExecution() != null) {
+            var release = d.releaseExecution();
+            if ("ROLLBACK".equals(release.kind())) {
+                if (release.expectedImage() == null || release.expectedDeploymentUid() == null
+                        || release.expectedServiceUid() == null || release.expectedGeneration() == null
+                        || release.expectedGeneration() < 1) {
+                    throw new ManifestPolicyException("Rollback requires complete current workload preconditions");
+                }
+            } else if (!"RECONCILIATION".equals(release.kind())
+                    || !d.immutableImageReference().equals(release.expectedImage())) {
+                throw new ManifestPolicyException("Unsupported release execution descriptor");
+            }
+        }
         String ns = d.namespaceName() == null ? "" : d.namespaceName().trim().toLowerCase(Locale.ROOT);
         if (ns.isEmpty() || FORBIDDEN_NAMESPACES.contains(ns)
                 || ns.startsWith("kube-") || ns.startsWith("openshift-") || ns.startsWith("k8s-")) {
