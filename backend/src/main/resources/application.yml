@@ -56,6 +56,13 @@ spring:
           database-product-name: PostgreSQL
 
 management:
+  tracing:
+    enabled: ${CLOUDFORGE_TRACING_ENABLED:false}
+    sampling:
+      probability: 0.1
+  otlp:
+    tracing:
+      endpoint: ${CLOUDFORGE_TRACING_ENDPOINT:http://127.0.0.1:4318/v1/traces}
   endpoints:
     web:
       exposure:

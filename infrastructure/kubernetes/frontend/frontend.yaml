@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudforge-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: cloudforge-frontend}
+  template:
+    metadata:
+      labels: {app: cloudforge-frontend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: frontend
+          image: cloudforge-frontend:local
+          ports: [{name: http, containerPort: 8080}]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+          readinessProbe:
+            httpGet: {path: /, port: http}
+          livenessProbe:
+            httpGet: {path: /, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 96Mi}
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 32Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cloudforge-frontend}
+spec:
+  selector: {app: cloudforge-frontend}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: cloudforge}
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [cloudforge.test]
+      secretName: cloudforge-tls
+  rules:
+    - host: cloudforge.test
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: {service: {name: cloudforge-backend, port: {number: 8080}}}
+          - path: /oauth2
+            pathType: Prefix
+            backend: {service: {name: cloudforge-backend, port: {number: 8080}}}
+          - path: /login/oauth2
+            pathType: Prefix
+            backend: {service: {name: cloudforge-backend, port: {number: 8080}}}
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: cloudforge-frontend, port: {number: 80}}}

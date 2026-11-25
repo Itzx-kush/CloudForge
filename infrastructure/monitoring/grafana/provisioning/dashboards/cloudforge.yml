@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: CloudForge
+    folder: CloudForge
+    type: file
+    options:
+      path: /etc/cloudforge/dashboards

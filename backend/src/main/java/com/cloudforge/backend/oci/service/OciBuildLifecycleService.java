@@ -85,6 +85,7 @@ public class OciBuildLifecycleService {
     private final OciArtifactEventRepository artifactEventRepository;
     private final BuildRequestValidator buildRequestValidator;
     private final LogSanitizer logSanitizer;
+    private final org.springframework.context.ApplicationEventPublisher events;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
 
@@ -102,6 +103,7 @@ public class OciBuildLifecycleService {
             OciArtifactEventRepository artifactEventRepository,
             BuildRequestValidator buildRequestValidator,
             LogSanitizer logSanitizer,
+            org.springframework.context.ApplicationEventPublisher events,
             AuditService auditService,
             ObjectMapper objectMapper
     ) {
@@ -118,6 +120,7 @@ public class OciBuildLifecycleService {
         this.artifactEventRepository = artifactEventRepository;
         this.buildRequestValidator = buildRequestValidator;
         this.logSanitizer = logSanitizer;
+        this.events = events;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
     }
@@ -727,6 +730,7 @@ public class OciBuildLifecycleService {
         ev.setMetadataJson(writeJson(metadata == null ? Map.of() : metadata));
         ev.setOccurredAt(occurredAt);
         artifactEventRepository.save(ev);
+        events.publishEvent(new com.cloudforge.backend.monitoring.OperationMetrics.CommittedAction(eventType));
     }
 
     public OciBuildRecordDto toBuildDto(OciBuildRecordEntity b) {

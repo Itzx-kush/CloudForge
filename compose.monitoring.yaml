@@ -1,0 +1,65 @@
+services:
+  backend:
+    environment:
+      CLOUDFORGE_TRACING_ENABLED: ${CLOUDFORGE_TRACING_ENABLED:-false}
+      CLOUDFORGE_TRACING_ENDPOINT: http://collector:4318/v1/traces
+      SPRING_PROFILES_ACTIVE: docker,monitoring
+      SPRING_CONFIG_IMPORT: configtree:/run/secrets/
+    secrets:
+      - source: metrics_token
+        target: cloudforge.monitoring.token
+  collector:
+    image: otel/opentelemetry-collector:0.131.0
+    command: ["--config=/etc/otel/config.yml"]
+    volumes:
+      - ./infrastructure/monitoring/collector.yml:/etc/otel/config.yml:ro
+    networks: [cloudforge-net]
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d", "--storage.tsdb.retention.size=2GB"]
+    volumes:
+      - ./infrastructure/monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    secrets: [metrics_token]
+    networks: [cloudforge-net]
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    volumes:
+      - ./infrastructure/monitoring/alertmanager:/etc/alertmanager:ro
+    networks: [cloudforge-net]
+  grafana:
+    image: grafana/grafana:12.1.1
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets: [grafana_password]
+    volumes:
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/monitoring/grafana/dashboards:/etc/cloudforge/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks: [cloudforge-net]
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    environment:
+      DATA_SOURCE_URI: "postgres:5432/${POSTGRES_DB:-cloudforge}?sslmode=disable"
+      DATA_SOURCE_USER: "${MONITORING_DB_USER:?set a pg_monitor login}"
+      DATA_SOURCE_PASS_FILE: /run/secrets/exporter_password
+    secrets: [exporter_password]
+    networks: [cloudforge-net]
+  worker-exporter:
+    image: prom/node-exporter:v1.9.1
+    command: ["--collector.disable-defaults", "--collector.textfile", "--collector.textfile.directory=/metrics"]
+    volumes:
+      - ${WORKER_METRICS_DIR:?set worker metrics directory}:/metrics:ro
+    networks: [cloudforge-net]
+secrets:
+  metrics_token:
+    file: ${METRICS_TOKEN_FILE:?set metrics token path}
+  grafana_password:
+    file: ${GRAFANA_PASSWORD_FILE:?set Grafana password path}
+  exporter_password:
+    file: ${EXPORTER_PASSWORD_FILE:?set exporter password path}
+volumes:
+  prometheus_data:
+  grafana_data:

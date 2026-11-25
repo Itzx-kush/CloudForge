@@ -1,0 +1,29 @@
+{
+  "uid": "cf-kubernetes",
+  "title": "CloudForge Kubernetes",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Deployment events",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cloudforge"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (action) (increase(cloudforge_operations_total{action=~\"KUBERNETES_.*\"}[1h]))"
+        }
+      ]
+    }
+  ]
+}
