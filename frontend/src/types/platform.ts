@@ -531,7 +531,8 @@ export type AllowedWorkerOperation =
   | 'WORKER_DIAGNOSTICS'
   | 'GITHUB_SOURCE_ACQUIRE'
   | 'OCI_IMAGE_BUILD'
-  | 'OCI_IMAGE_PUBLISH';
+  | 'OCI_IMAGE_PUBLISH'
+  | 'KUBERNETES_DEPLOY';
 
 export type WorkerStatus = 'AVAILABLE' | 'BUSY' | 'DRAINING' | 'OFFLINE';
 
@@ -539,6 +540,7 @@ export type WorkerAdapterType =
   | 'DOCKER_ISOLATED'
   | 'GITHUB_SOURCE'
   | 'OCI_BUILDKIT'
+  | 'KUBERNETES_DEPLOY'
   | 'MOCK_TEST';
 
 export type AttemptStatus =
@@ -906,4 +908,310 @@ export interface PipelineRunArtifacts {
   publishAttempts: OciPublishAttempt[];
   artifacts: OciImageArtifact[];
   events: OciArtifactEvent[];
+}
+
+// --- Phase 3.6: Secure Kubernetes Deployment Engine ---
+
+export type KubernetesClusterType =
+  | 'KIND_LOCAL'
+  | 'K3D_LOCAL'
+  | 'K3S_LOCAL'
+  | 'REMOTE_KUBERNETES';
+
+export type KubernetesClusterStatus =
+  | 'PENDING_VALIDATION'
+  | 'VALIDATING'
+  | 'VALIDATED'
+  | 'VALIDATION_FAILED'
+  | 'DISABLED';
+
+export type KubernetesPodSecurityStandard = 'RESTRICTED' | 'BASELINE';
+
+export type KubernetesNetworkPolicyMode =
+  | 'DEFAULT_DENY'
+  | 'ENFORCED_VERIFIED'
+  | 'UNENFORCED_LOCAL_CNI';
+
+export type KubernetesNamespaceBindingStatus = 'ACTIVE' | 'DISABLED';
+
+export type KubernetesDeploymentStatus =
+  | 'PENDING'
+  | 'VALIDATING'
+  | 'APPLYING'
+  | 'ROLLING_OUT'
+  | 'VERIFYING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'RECONCILIATION_REQUIRED';
+
+export interface KubernetesProbeConfig {
+  type: 'HTTP_GET' | 'TCP_SOCKET';
+  path?: string | null;
+  port?: number | null;
+  initialDelaySeconds?: number | null;
+  periodSeconds?: number | null;
+  timeoutSeconds?: number | null;
+  failureThreshold?: number | null;
+  successThreshold?: number | null;
+}
+
+export interface KubernetesSubsystemStatus {
+  kubernetesEnabled: boolean;
+  allowLocalDevClusters: boolean;
+  allowProductionDeployments: boolean;
+  allowedApiHosts: string[];
+  maxReplicas: number;
+  maxDeploymentTimeoutSeconds: number;
+  configuredClusters: number;
+  validatedClusters: number;
+  activeNamespaceBindings: number;
+  totalDeployments: number;
+  runningDeployments: number;
+  succeededDeployments: number;
+  failedDeployments: number;
+  activeDeployWorkers: number;
+}
+
+export interface KubernetesNamespaceBinding {
+  id: string;
+  workspaceId: string;
+  clusterConnectionId: string;
+  clusterName: string;
+  projectId: string;
+  projectName: string;
+  environmentId: string;
+  environmentName: string;
+  environmentType: EnvironmentType;
+  namespaceName: string;
+  workloadServiceAccountName: string;
+  imagePullSecretName: string | null;
+  podSecurityStandard: KubernetesPodSecurityStandard;
+  networkPolicyMode: KubernetesNetworkPolicyMode;
+  resourceQuotaConfigured: boolean;
+  limitRangeConfigured: boolean;
+  status: KubernetesNamespaceBindingStatus;
+  verifiedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KubernetesClusterConnection {
+  id: string;
+  workspaceId: string;
+  name: string;
+  slug: string;
+  clusterIdentifier: string;
+  clusterType: KubernetesClusterType;
+  environmentCategory: EnvironmentType;
+  apiServerUrl: string;
+  caCertificateFingerprintSha256: string;
+  credentialProjectId: string;
+  credentialProjectName: string;
+  credentialEnvironmentId: string;
+  credentialEnvironmentName: string;
+  bearerTokenSecretId: string;
+  bearerTokenSecretName: string;
+  serviceAccountName: string;
+  allowLocalLoopback: boolean;
+  productionApprovalRequired: boolean;
+  connectionStatus: KubernetesClusterStatus;
+  validationRequestedAt: string | null;
+  lastValidatedAt: string | null;
+  lastValidationWorkerId: string | null;
+  lastValidationError: string | null;
+  kubernetesVersion: string | null;
+  supportedCapabilities: Record<string, unknown>;
+  namespaceBindings: KubernetesNamespaceBinding[];
+  description: string | null;
+  createdByUsername: string | null;
+  updatedByUsername: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateClusterConnectionInput {
+  name: string;
+  clusterIdentifier: string;
+  clusterType: KubernetesClusterType;
+  environmentCategory: EnvironmentType;
+  apiServerUrl: string;
+  caCertificatePem: string;
+  credentialProjectId: string;
+  credentialEnvironmentId: string;
+  bearerTokenSecretId: string;
+  serviceAccountName: string;
+  allowLocalLoopback?: boolean;
+  productionApprovalRequired?: boolean;
+  description?: string;
+}
+
+export interface CreateNamespaceBindingInput {
+  projectId: string;
+  environmentId: string;
+  namespaceName?: string;
+  workloadServiceAccountName?: string;
+  imagePullSecretName?: string | null;
+  podSecurityStandard?: KubernetesPodSecurityStandard;
+  networkPolicyMode?: KubernetesNetworkPolicyMode;
+  resourceQuotaConfigured?: boolean;
+  limitRangeConfigured?: boolean;
+}
+
+export interface KubernetesDeploymentConfig {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  environmentId: string;
+  environmentName: string;
+  environmentType: EnvironmentType;
+  clusterConnectionId: string;
+  clusterName: string;
+  namespaceBindingId: string;
+  namespaceName: string;
+  deploymentName: string;
+  serviceName: string;
+  replicaCount: number;
+  containerPort: number;
+  servicePort: number;
+  cpuRequest: string;
+  cpuLimit: string;
+  memoryRequest: string;
+  memoryLimit: string;
+  readinessProbe: KubernetesProbeConfig;
+  livenessProbe: KubernetesProbeConfig;
+  startupProbe: KubernetesProbeConfig | null;
+  rollingMaxSurge: string;
+  rollingMaxUnavailable: string;
+  progressDeadlineSeconds: number;
+  deploymentTimeoutSeconds: number;
+  readOnlyRootFilesystem: boolean;
+  runAsNonRoot: boolean;
+  runAsUser: number;
+  configChecksumSha256: string;
+  updatedAt: string;
+}
+
+export interface CreateDeploymentInput {
+  projectId: string;
+  environmentId: string;
+  clusterConnectionId: string;
+  namespaceBindingId?: string | null;
+  namespace?: string | null;
+  ociArtifactId: string;
+  deploymentName?: string;
+  serviceName?: string;
+  replicaCount?: number;
+  containerPort?: number;
+  servicePort?: number;
+  cpuRequest?: string;
+  cpuLimit?: string;
+  memoryRequest?: string;
+  memoryLimit?: string;
+  readinessProbe?: KubernetesProbeConfig;
+  livenessProbe?: KubernetesProbeConfig;
+  startupProbe?: KubernetesProbeConfig | null;
+  rollingMaxSurge?: string;
+  rollingMaxUnavailable?: string;
+  progressDeadlineSeconds?: number;
+  deploymentTimeoutSeconds?: number;
+  readOnlyRootFilesystem?: boolean;
+  runAsNonRoot?: boolean;
+  runAsUser?: number;
+  productionApprovalConfirmed?: boolean;
+  productionApprovalJustification?: string;
+  idempotencyKey?: string;
+}
+
+export interface KubernetesDeploymentOperation {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  environmentId: string;
+  environmentName: string;
+  environmentType: EnvironmentType;
+  clusterConnectionId: string;
+  clusterName: string;
+  clusterIdentifier: string;
+  namespaceBindingId: string;
+  namespaceName: string;
+  deploymentConfigId: string | null;
+  ociArtifactId: string;
+  pipelineRunId: string;
+  pipelineRunNumber: number | null;
+  stageRunId: string;
+  attemptId: string | null;
+  deploymentName: string;
+  serviceName: string;
+  immutableImageReference: string;
+  manifestDigest: string;
+  sourceCommitSha: string;
+  manifestChecksumSha256: string;
+  configSnapshot: Record<string, unknown>;
+  requestedReplicas: number;
+  observedReplicas: number;
+  updatedReplicas: number;
+  readyReplicas: number;
+  availableReplicas: number;
+  observedGeneration: number | null;
+  k8sDeploymentUid: string | null;
+  k8sServiceUid: string | null;
+  rolloutConditions: Array<Record<string, unknown>>;
+  podDiagnostics: Array<Record<string, unknown>>;
+  status: KubernetesDeploymentStatus;
+  applyInitiated: boolean;
+  assignedWorkerId: string | null;
+  fencingGeneration: number;
+  requestedByUsername: string | null;
+  cancelledByUsername: string | null;
+  cancellationRequestedAt: string | null;
+  failureCategory: string | null;
+  errorSummary: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KubernetesDeploymentStatusSnapshot {
+  deploymentId: string;
+  workspaceId: string;
+  clusterName: string;
+  namespaceName: string;
+  deploymentName: string;
+  serviceName: string;
+  immutableImageReference: string;
+  manifestDigest: string;
+  status: KubernetesDeploymentStatus;
+  applyInitiated: boolean;
+  requestedReplicas: number;
+  observedReplicas: number;
+  updatedReplicas: number;
+  readyReplicas: number;
+  availableReplicas: number;
+  observedGeneration: number | null;
+  k8sDeploymentUid: string | null;
+  k8sServiceUid: string | null;
+  rolloutConditions: Array<Record<string, unknown>>;
+  podDiagnostics: Array<Record<string, unknown>>;
+  failureCategory: string | null;
+  errorSummary: string | null;
+  cancellationRequestedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
+export interface KubernetesDeploymentEvent {
+  id: string;
+  deploymentOperationId: string;
+  eventType: string;
+  fromStatus: string | null;
+  toStatus: string | null;
+  actorLabel: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
 }

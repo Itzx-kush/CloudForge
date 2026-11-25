@@ -9,6 +9,7 @@ import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.exception.ConflictException;
 import com.cloudforge.backend.exception.ForbiddenOperationException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.k8s.service.KubernetesDeploymentLifecycleService;
 import com.cloudforge.backend.oci.service.BuildRequestValidator;
 import com.cloudforge.backend.oci.service.SourceHandoffService;
 import com.cloudforge.backend.orchestration.dto.CancelPipelineRunRequest;
@@ -103,6 +104,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
     private final ProjectSourceService sourceService;
     private final BuildRequestValidator buildRequestValidator;
     private final SourceHandoffService sourceHandoffService;
+    private final KubernetesDeploymentLifecycleService k8sLifecycleService;
     private final ObjectMapper objectMapper;
 
     public PipelineOrchestrationService(
@@ -125,6 +127,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
             ProjectSourceService sourceService,
             BuildRequestValidator buildRequestValidator,
             SourceHandoffService sourceHandoffService,
+            KubernetesDeploymentLifecycleService k8sLifecycleService,
             ObjectMapper objectMapper
     ) {
         this.authorizationService = authorizationService;
@@ -146,6 +149,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
         this.sourceService = sourceService;
         this.buildRequestValidator = buildRequestValidator;
         this.sourceHandoffService = sourceHandoffService;
+        this.k8sLifecycleService = k8sLifecycleService;
         this.objectMapper = objectMapper;
     }
 
@@ -578,6 +582,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
             runRepository.flush();
             stageRunRepository.flush();
             attemptRepository.flush();
+            k8sLifecycleService.handlePipelineRunCancellation(run.getId(), user, userReason, now);
             return loadRunDto(workspaceId, run.getId());
         }
 
@@ -607,6 +612,7 @@ public class PipelineOrchestrationService implements WorkerAssignmentContract {
         runRepository.flush();
         stageRunRepository.flush();
         sourceHandoffService.cleanupForRun(run.getId());
+        k8sLifecycleService.handlePipelineRunCancellation(run.getId(), user, userReason, now);
 
         auditService.record(
                 workspace,

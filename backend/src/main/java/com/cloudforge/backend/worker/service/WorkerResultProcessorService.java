@@ -4,6 +4,7 @@ import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.exception.ConflictException;
 import com.cloudforge.backend.exception.ForbiddenOperationException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.k8s.service.KubernetesDeploymentLifecycleService;
 import com.cloudforge.backend.oci.service.OciBuildLifecycleService;
 import com.cloudforge.backend.oci.service.SourceHandoffService;
 import com.cloudforge.backend.orchestration.engine.StageDependencyEvaluator;
@@ -64,6 +65,7 @@ public class WorkerResultProcessorService {
     private final LogSanitizer logSanitizer;
     private final AttemptSecretRedactionService attemptSecretRedactionService;
     private final OciBuildLifecycleService ociBuildLifecycleService;
+    private final KubernetesDeploymentLifecycleService k8sLifecycleService;
     private final SourceHandoffService sourceHandoffService;
     private final ObjectMapper objectMapper;
 
@@ -79,6 +81,7 @@ public class WorkerResultProcessorService {
             LogSanitizer logSanitizer,
             AttemptSecretRedactionService attemptSecretRedactionService,
             OciBuildLifecycleService ociBuildLifecycleService,
+            KubernetesDeploymentLifecycleService k8sLifecycleService,
             SourceHandoffService sourceHandoffService,
             ObjectMapper objectMapper
     ) {
@@ -93,6 +96,7 @@ public class WorkerResultProcessorService {
         this.logSanitizer = logSanitizer;
         this.attemptSecretRedactionService = attemptSecretRedactionService;
         this.ociBuildLifecycleService = ociBuildLifecycleService;
+        this.k8sLifecycleService = k8sLifecycleService;
         this.sourceHandoffService = sourceHandoffService;
         this.objectMapper = objectMapper;
     }
@@ -199,6 +203,16 @@ public class WorkerResultProcessorService {
                 ociBuildLifecycleService.reconcileAbortedAttempt(
                         attempt,
                         StringUtils.hasText(request.summary()) ? request.summary().trim() : "OCI stage ended with " + reportedStatus,
+                        reportedStatus == AttemptStatus.CANCELLED
+                );
+            }
+        } else if (parsedOp != null && parsedOp.isKubernetesOperation()) {
+            if (reportedStatus == AttemptStatus.SUCCEEDED) {
+                k8sLifecycleService.verifyCompletionPreconditions(attempt);
+            } else {
+                k8sLifecycleService.reconcileAbortedAttempt(
+                        attempt,
+                        StringUtils.hasText(request.summary()) ? request.summary().trim() : "Kubernetes deployment stage ended with " + reportedStatus,
                         reportedStatus == AttemptStatus.CANCELLED
                 );
             }

@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cloudforge-allow-dns-and-same-namespace
+  namespace: cf-example-app-dev
+  labels:
+    app.kubernetes.io/managed-by: cloudforge
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: cloudforge
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Permit intra-namespace traffic only (e.g. probes/service consumers within the same isolated namespace)
+    - from:
+        - podSelector: {}
+  egress:
+    # Permit narrowly scoped DNS resolution to kube-system CoreDNS only
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

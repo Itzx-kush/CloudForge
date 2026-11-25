@@ -10,6 +10,8 @@ import com.cloudforge.backend.entity.WorkspaceMemberEntity;
 import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.exception.ConflictException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.k8s.repository.KubernetesDeploymentConfigRepository;
+import com.cloudforge.backend.k8s.service.KubernetesDeploymentLifecycleService;
 import com.cloudforge.backend.oci.service.BuildRequestValidator;
 import com.cloudforge.backend.orchestration.dto.CreatePipelineDefinitionRequest;
 import com.cloudforge.backend.orchestration.dto.PipelineDefinitionDto;
@@ -72,6 +74,7 @@ public class PipelineDefinitionService {
     private final PipelineStageDefinitionRepository stageDefinitionRepository;
     private final StageDagValidator dagValidator;
     private final BuildRequestValidator buildRequestValidator;
+    private final KubernetesDeploymentConfigRepository k8sConfigRepository;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
 
@@ -88,6 +91,7 @@ public class PipelineDefinitionService {
             PipelineStageDefinitionRepository stageDefinitionRepository,
             StageDagValidator dagValidator,
             BuildRequestValidator buildRequestValidator,
+            KubernetesDeploymentConfigRepository k8sConfigRepository,
             AuditService auditService,
             ObjectMapper objectMapper
     ) {
@@ -103,6 +107,7 @@ public class PipelineDefinitionService {
         this.stageDefinitionRepository = stageDefinitionRepository;
         this.dagValidator = dagValidator;
         this.buildRequestValidator = buildRequestValidator;
+        this.k8sConfigRepository = k8sConfigRepository;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
     }
@@ -160,7 +165,7 @@ public class PipelineDefinitionService {
         LinkedRepositoryEntity repository = resolveRepository(workspaceId, request.linkedRepositoryId(), project);
         ProjectEnvironmentEntity targetEnvironment = resolveTargetEnvironment(project.getId(), request.targetEnvironmentId());
         StageDagValidator.ValidatedStageGraph validatedGraph = validateStageRequests(request.stages());
-        validateOciStageConfigurations(workspaceId, validatedGraph);
+        validateOciStageConfigurations(workspaceId, project.getId(), validatedGraph);
         Map<String, List<StageSecretBindingDto>> resolvedBindingsByStage = validateAndResolveSecretBindings(
                 workspaceId,
                 project,
@@ -261,7 +266,7 @@ public class PipelineDefinitionService {
         ProjectEnvironmentEntity targetEnvironment = resolveTargetEnvironment(project.getId(), request.targetEnvironmentId());
 
         StageDagValidator.ValidatedStageGraph validatedGraph = validateStageRequests(request.stages());
-        validateOciStageConfigurations(workspaceId, validatedGraph);
+        validateOciStageConfigurations(workspaceId, project.getId(), validatedGraph);
         Map<String, List<StageSecretBindingDto>> resolvedBindingsByStage = validateAndResolveSecretBindings(
                 workspaceId,
                 project,
@@ -363,6 +368,7 @@ public class PipelineDefinitionService {
 
     private void validateOciStageConfigurations(
             UUID workspaceId,
+            UUID projectId,
             StageDagValidator.ValidatedStageGraph validatedGraph
     ) {
         for (StageDagValidator.ValidatedStageSpec spec : validatedGraph.orderedStages()) {
@@ -371,6 +377,24 @@ public class PipelineDefinitionService {
                 buildRequestValidator.validateBuildStageConfig(workspaceId, spec.stageKey(), spec.metadata(), spec.timeoutSeconds());
             } else if (op == AllowedWorkerOperation.OCI_IMAGE_PUBLISH) {
                 buildRequestValidator.validatePublishStageConfig(workspaceId, spec.stageKey(), spec.metadata());
+            } else if (op == AllowedWorkerOperation.KUBERNETES_DEPLOY) {
+                String rawConfigId = spec.metadata().get(KubernetesDeploymentLifecycleService.META_DEPLOYMENT_CONFIG_ID);
+                if (!StringUtils.hasText(rawConfigId)) {
+                    throw new BadRequestException(
+                            "Stage \"" + spec.stageKey() + "\" (KUBERNETES_DEPLOY) requires a saved workspace deploymentConfigId"
+                    );
+                }
+                UUID configId;
+                try {
+                    configId = UUID.fromString(rawConfigId.trim());
+                } catch (IllegalArgumentException ex) {
+                    throw new BadRequestException("Invalid deploymentConfigId UUID on stage \"" + spec.stageKey() + "\"");
+                }
+                var cfg = k8sConfigRepository.findByIdAndWorkspaceIdWithDetails(configId, workspaceId)
+                        .orElseThrow(() -> new BadRequestException("Referenced Kubernetes deploymentConfigId was not found in this workspace"));
+                if (!cfg.getProject().getId().equals(projectId)) {
+                    throw new BadRequestException("Referenced Kubernetes deploymentConfigId belongs to a different project");
+                }
             }
         }
     }
@@ -460,7 +484,8 @@ public class PipelineDefinitionService {
             );
             if (operation.isEmpty()
                     || operation.get() == AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE
-                    || operation.get().isOciOperation()) {
+                    || operation.get().isOciOperation()
+                    || operation.get().isKubernetesOperation()) {
                 throw new BadRequestException(
                         "Stage \"" + stageSpec.stageKey() + "\" (" + stageSpec.stageType()
                                 + ") cannot bind encrypted secrets without an approved Phase 3.4 worker operation"

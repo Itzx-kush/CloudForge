@@ -37,6 +37,7 @@ import {
   cancelPipelineRun,
   createPipelineDefinition,
   createPipelineRun,
+  fetchDeploymentConfigs,
   fetchEnvironmentSecrets,
   fetchOciRegistries,
   fetchPipelineDefinitions,
@@ -55,6 +56,7 @@ import type {
   AllowedWorkerOperation,
   AttemptStatus,
   EnvironmentSecretSummary,
+  KubernetesDeploymentConfig,
   LinkedRepository,
   OciRegistryConnection,
   PipelineDefinition,
@@ -132,6 +134,9 @@ const ALLOWLISTED_OPS_BY_STAGE_TYPE: Partial<
   CONTAINER_PACKAGE: [
     { value: 'OCI_IMAGE_PUBLISH', label: 'OCI_IMAGE_PUBLISH (Publish & verify immutable digest)' },
   ],
+  DEPLOYMENT: [
+    { value: 'KUBERNETES_DEPLOY', label: 'KUBERNETES_DEPLOY (Dedicated Kubernetes rolling deployment)' },
+  ],
 };
 
 function isOciStageOperation(op: string): boolean {
@@ -143,6 +148,7 @@ function stageSupportsSecretBindings(stageType: PipelineStageType, allowedOperat
     (ALLOWLISTED_OPS_BY_STAGE_TYPE[stageType]?.length ?? 0) > 0 &&
     Boolean(allowedOperation) &&
     allowedOperation !== 'GITHUB_SOURCE_ACQUIRE' &&
+    allowedOperation !== 'KUBERNETES_DEPLOY' &&
     !isOciStageOperation(allowedOperation)
   );
 }
@@ -183,6 +189,7 @@ interface EditableStageRow {
   ociTargetTag?: string;
   ociTargetPlatform?: string;
   ociBuildMode?: string;
+  deploymentConfigId?: string;
 }
 
 function defaultStarterStages(): EditableStageRow[] {
@@ -260,6 +267,7 @@ export function CloudForgePipelinesPanel() {
   const [totalRuns, setTotalRuns] = useState(0);
   const [workerPool, setWorkerPool] = useState<WorkerPoolStatus | null>(null);
   const [ociRegistries, setOciRegistries] = useState<OciRegistryConnection[]>([]);
+  const [deploymentConfigs, setDeploymentConfigs] = useState<KubernetesDeploymentConfig[]>([]);
   const [selectedRunArtifacts, setSelectedRunArtifacts] = useState<PipelineRunArtifacts | null>(null);
 
   // Stage execution attempts & bounded sanitized logs state (keyed by stageRunId)
@@ -338,7 +346,7 @@ export function CloudForgePipelinesPanel() {
       setErrorMessage(null);
 
       try {
-        const [projRes, repoRes, defRes, runRes, workerRes, regRes] = await Promise.all([
+        const [projRes, repoRes, defRes, runRes, workerRes, regRes, depCfgRes] = await Promise.all([
           fetchProjects(activeWorkspace.id, { page: 0, size: 100 }),
           fetchRepositories(activeWorkspace.id, { page: 0, size: 100 }),
           fetchPipelineDefinitions(activeWorkspace.id, {
@@ -356,6 +364,7 @@ export function CloudForgePipelinesPanel() {
           }),
           fetchWorkerPoolStatus(activeWorkspace.id).catch(() => null),
           fetchOciRegistries(activeWorkspace.id).catch(() => []),
+          fetchDeploymentConfigs(activeWorkspace.id).catch(() => []),
         ]);
 
         setProjects(Array.isArray(projRes.items) ? projRes.items : []);
@@ -368,6 +377,7 @@ export function CloudForgePipelinesPanel() {
           workerRes && typeof workerRes.workerPlaneEnabled === 'boolean' ? workerRes : null
         );
         setOciRegistries(Array.isArray(regRes) ? regRes : []);
+        setDeploymentConfigs(Array.isArray(depCfgRes) ? depCfgRes : []);
       } catch (error) {
         setErrorMessage(
           error instanceof Error
@@ -479,6 +489,7 @@ export function CloudForgePipelinesPanel() {
         ociTargetTag: s.metadata?.targetTag ?? '',
         ociTargetPlatform: s.metadata?.targetPlatform ?? 'linux/amd64',
         ociBuildMode: s.metadata?.buildMode ?? 'ROOTLESS_BUILDKIT',
+        deploymentConfigId: s.metadata?.deploymentConfigId ?? '',
       }))
     );
     setDefFormError(null);
@@ -566,6 +577,8 @@ export function CloudForgePipelinesPanel() {
           if (s.ociRegistryId) metadata.registryConnectionId = s.ociRegistryId;
           if (s.ociTargetImageName?.trim()) metadata.targetImageName = s.ociTargetImageName.trim();
           if (s.ociTargetTag?.trim()) metadata.targetTag = s.ociTargetTag.trim();
+        } else if (s.allowedOperation === 'KUBERNETES_DEPLOY') {
+          if (s.deploymentConfigId?.trim()) metadata.deploymentConfigId = s.deploymentConfigId.trim();
         }
       }
       return {
@@ -1841,6 +1854,40 @@ export function CloudForgePipelinesPanel() {
                             </>
                           )}
                         </div>
+                      </div>
+                    )}
+
+                    {stage.allowedOperation === 'KUBERNETES_DEPLOY' && (
+                      <div className="cf-field">
+                        <label
+                          htmlFor={`stage-k8s-cfg-${stage.localId}`}
+                          className="cf-field__label"
+                        >
+                          Kubernetes Deployment Configuration (Phase 3.6) *
+                        </label>
+                        <select
+                          id={`stage-k8s-cfg-${stage.localId}`}
+                          className="cf-select"
+                          value={stage.deploymentConfigId ?? ''}
+                          onChange={(e) =>
+                            updateStageRow(stage.localId, (row) => ({
+                              ...row,
+                              deploymentConfigId: e.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Select saved project deployment target...</option>
+                          {deploymentConfigs
+                            .filter((cfg) => !formProjectId || cfg.projectId === formProjectId)
+                            .map((cfg) => (
+                              <option key={cfg.id} value={cfg.id}>
+                                {cfg.deploymentName} · {cfg.clusterName}/{cfg.namespaceName} ({cfg.environmentType})
+                              </option>
+                            ))}
+                        </select>
+                        <span className="cf-field__hint">
+                          Deploys the upstream verified immutable OCI digest using a dedicated KUBERNETES_DEPLOY worker.
+                        </span>
                       </div>
                     )}
 

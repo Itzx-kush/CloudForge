@@ -282,6 +282,105 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
         );
     }
 
+    @Override
+    public Optional<ClusterValidationTask> claimClusterValidation(String workerId) {
+        try {
+            HttpRequest request = authorizedPost("/api/internal/workers/" + workerId + "/k8s/cluster-validations/claim", "");
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 204) {
+                return Optional.empty();
+            }
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return Optional.of(objectMapper.readValue(response.body(), ClusterValidationTask.class));
+            }
+            throw new IllegalStateException("Cluster validation claim failed with HTTP " + response.statusCode());
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Cluster validation claim error: " + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public ClusterCredentialsResult fetchClusterValidationCredentials(
+            String workerId,
+            UUID clusterId,
+            long validationNonce
+    ) {
+        return postJson(
+                "/api/internal/workers/" + workerId + "/k8s/cluster-validations/" + clusterId + "/credentials",
+                Map.of("validationNonce", validationNonce),
+                ClusterCredentialsResult.class
+        );
+    }
+
+    @Override
+    public void completeClusterValidation(
+            String workerId,
+            UUID clusterId,
+            ClusterValidationResultPayload payload
+    ) {
+        postJson(
+                "/api/internal/workers/" + workerId + "/k8s/cluster-validations/" + clusterId + "/complete",
+                payload,
+                Void.class
+        );
+    }
+
+    @Override
+    public KubernetesExecutionDescriptor fetchKubernetesDescriptor(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        return postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/k8s-descriptor",
+                Map.of("leaseToken", leaseToken, "fencingGeneration", fencingGeneration),
+                KubernetesExecutionDescriptor.class
+        );
+    }
+
+    @Override
+    public ClusterCredentialsResult fetchKubernetesDeploymentCredentials(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        return postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/k8s-credentials",
+                Map.of("leaseToken", leaseToken, "fencingGeneration", fencingGeneration),
+                ClusterCredentialsResult.class
+        );
+    }
+
+    @Override
+    public void reportKubernetesStatus(
+            String workerId,
+            UUID attemptId,
+            KubernetesStatusUpdatePayload payload
+    ) {
+        postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/k8s-status",
+                payload,
+                Void.class
+        );
+    }
+
+    @Override
+    public void reportKubernetesResult(
+            String workerId,
+            UUID attemptId,
+            KubernetesResultPayload payload
+    ) {
+        postJson(
+                "/api/internal/workers/" + workerId + "/attempts/" + attemptId + "/k8s-result",
+                payload,
+                Void.class
+        );
+    }
+
     private DownloadedHandoff downloadHandoffBinary(
             String path,
             String leaseToken,
@@ -397,7 +496,9 @@ public class HttpControlPlaneClient implements ControlPlaneClient {
     private static boolean isSensitiveResponse(String path) {
         return path.endsWith("/secrets")
                 || path.endsWith("/source-archive")
-                || path.endsWith("/registry-credentials");
+                || path.endsWith("/registry-credentials")
+                || path.endsWith("/k8s-credentials")
+                || path.endsWith("/credentials");
     }
 
     private HttpRequest authorizedPost(String path, String jsonBody) {

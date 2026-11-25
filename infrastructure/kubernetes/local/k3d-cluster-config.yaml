@@ -1,0 +1,22 @@
+# Disposable local k3d cluster configuration for CloudForge Phase 3.6 verification.
+# k3s bundles flannel + kube-router NetworkPolicy controller out of the box.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: cloudforge-local-dev
+servers: 1
+agents: 0
+kubeAPI:
+  host: "127.0.0.1"
+  hostIP: "127.0.0.1"
+  hostPort: "6445"
+registries:
+  config: |
+    mirrors:
+      "localhost:5000":
+        endpoint:
+          - http://cloudforge-registry:5000
+options:
+  kubeconfig:
+    updateDefaultKubeconfig: false
+    switchCurrentContext: false

@@ -145,6 +145,16 @@ cloudforge:
     max-build-timeout-seconds: ${CLOUDFORGE_OCI_MAX_BUILD_TIMEOUT_SECONDS:900}
     max-credential-deliveries-per-attempt: ${CLOUDFORGE_OCI_MAX_CREDENTIAL_DELIVERIES_PER_ATTEMPT:2}
     handoff-cleanup-interval-ms: ${CLOUDFORGE_OCI_HANDOFF_CLEANUP_INTERVAL_MS:300000}
+  kubernetes:
+    enabled: ${CLOUDFORGE_K8S_ENABLED:false}
+    allow-local-dev-clusters: ${CLOUDFORGE_K8S_ALLOW_LOCAL_DEV_CLUSTERS:false}
+    allow-insecure-local-credential-delivery: ${CLOUDFORGE_K8S_ALLOW_INSECURE_LOCAL_CREDENTIAL_DELIVERY:false}
+    allow-production-deployments: ${CLOUDFORGE_K8S_ALLOW_PRODUCTION_DEPLOYMENTS:false}
+    allowed-api-hosts: ${CLOUDFORGE_K8S_ALLOWED_API_HOSTS:}
+    allowed-worker-ids: ${CLOUDFORGE_K8S_ALLOWED_WORKER_IDS:}
+    max-deployment-timeout-seconds: ${CLOUDFORGE_K8S_MAX_DEPLOYMENT_TIMEOUT_SECONDS:900}
+    max-replicas: ${CLOUDFORGE_K8S_MAX_REPLICAS:20}
+    max-credential-deliveries-per-attempt: ${CLOUDFORGE_K8S_MAX_CREDENTIAL_DELIVERIES_PER_ATTEMPT:2}
 
 logging:
   level:

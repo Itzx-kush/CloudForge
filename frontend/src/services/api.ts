@@ -4,7 +4,10 @@ import type {
   AuditEvent,
   AuthConfig,
   AuthMePayload,
+  CreateClusterConnectionInput,
+  CreateDeploymentInput,
   CreateEnvironmentSecretInput,
+  CreateNamespaceBindingInput,
   CreatePipelineDefinitionInput,
   CreatePipelineRunInput,
   CreateProjectInput,
@@ -18,6 +21,14 @@ import type {
   GitHubSyncResponse,
   GitHubWorkflow,
   GitHubWorkflowRun,
+  KubernetesClusterConnection,
+  KubernetesDeploymentConfig,
+  KubernetesDeploymentEvent,
+  KubernetesDeploymentOperation,
+  KubernetesDeploymentStatus,
+  KubernetesDeploymentStatusSnapshot,
+  KubernetesNamespaceBinding,
+  KubernetesSubsystemStatus,
   LinkedRepository,
   OciArtifactVerificationStatus,
   OciBuildRecord,
@@ -934,6 +945,163 @@ export function fetchPipelineRunArtifacts(
 ): Promise<PipelineRunArtifacts> {
   return apiRequest<PipelineRunArtifacts>(
     `/api/workspaces/${workspaceId}/pipelines/runs/${runId}/artifacts`
+  );
+}
+
+// --- Phase 3.6: Secure Kubernetes Deployment Engine API ---
+
+export function fetchKubernetesSubsystemStatus(
+  workspaceId: string
+): Promise<KubernetesSubsystemStatus> {
+  return apiRequest<KubernetesSubsystemStatus>(
+    `/api/workspaces/${workspaceId}/kubernetes/status`
+  );
+}
+
+export function fetchKubernetesClusters(
+  workspaceId: string
+): Promise<KubernetesClusterConnection[]> {
+  return apiRequest<KubernetesClusterConnection[]>(
+    `/api/workspaces/${workspaceId}/clusters`
+  );
+}
+
+export function createKubernetesCluster(
+  workspaceId: string,
+  input: CreateClusterConnectionInput
+): Promise<KubernetesClusterConnection> {
+  return apiRequest<KubernetesClusterConnection>(
+    `/api/workspaces/${workspaceId}/clusters`,
+    { method: 'POST', body: input }
+  );
+}
+
+export function validateKubernetesCluster(
+  workspaceId: string,
+  clusterId: string
+): Promise<KubernetesClusterConnection> {
+  return apiRequest<KubernetesClusterConnection>(
+    `/api/workspaces/${workspaceId}/clusters/${clusterId}/validate`,
+    { method: 'POST' }
+  );
+}
+
+export function disableKubernetesCluster(
+  workspaceId: string,
+  clusterId: string
+): Promise<KubernetesClusterConnection> {
+  return apiRequest<KubernetesClusterConnection>(
+    `/api/workspaces/${workspaceId}/clusters/${clusterId}/disable`,
+    { method: 'POST' }
+  );
+}
+
+export function fetchWorkspaceNamespaces(
+  workspaceId: string
+): Promise<KubernetesNamespaceBinding[]> {
+  return apiRequest<KubernetesNamespaceBinding[]>(
+    `/api/workspaces/${workspaceId}/namespaces`
+  );
+}
+
+export function createNamespaceBinding(
+  workspaceId: string,
+  clusterId: string,
+  input: CreateNamespaceBindingInput
+): Promise<KubernetesNamespaceBinding> {
+  return apiRequest<KubernetesNamespaceBinding>(
+    `/api/workspaces/${workspaceId}/clusters/${clusterId}/namespaces`,
+    { method: 'POST', body: input }
+  );
+}
+
+export function fetchDeploymentConfigs(
+  workspaceId: string
+): Promise<KubernetesDeploymentConfig[]> {
+  return apiRequest<KubernetesDeploymentConfig[]>(
+    `/api/workspaces/${workspaceId}/deployment-configs`
+  );
+}
+
+export function fetchKubernetesDeployments(
+  workspaceId: string,
+  params: {
+    projectId?: string;
+    environmentId?: string;
+    clusterId?: string;
+    status?: KubernetesDeploymentStatus | '';
+    q?: string;
+    page?: number;
+    size?: number;
+  } = {}
+): Promise<PagedResponse<KubernetesDeploymentOperation>> {
+  const search = new URLSearchParams();
+  if (params.projectId) search.set('projectId', params.projectId);
+  if (params.environmentId) search.set('environmentId', params.environmentId);
+  if (params.clusterId) search.set('clusterId', params.clusterId);
+  if (params.status) search.set('status', params.status);
+  if (params.q && params.q.trim()) search.set('q', params.q.trim());
+  if (params.page !== undefined) search.set('page', String(params.page));
+  if (params.size !== undefined) search.set('size', String(params.size));
+  const qs = search.toString();
+  return apiRequest<PagedResponse<KubernetesDeploymentOperation>>(
+    `/api/workspaces/${workspaceId}/deployments${qs ? `?${qs}` : ''}`
+  );
+}
+
+export function createKubernetesDeployment(
+  workspaceId: string,
+  input: CreateDeploymentInput,
+  idempotencyKey?: string
+): Promise<KubernetesDeploymentOperation> {
+  const headers: Record<string, string> = {};
+  if (idempotencyKey && idempotencyKey.trim()) {
+    headers['Idempotency-Key'] = idempotencyKey.trim();
+  }
+  return apiRequest<KubernetesDeploymentOperation>(
+    `/api/workspaces/${workspaceId}/deployments`,
+    { method: 'POST', body: input, headers }
+  );
+}
+
+export function fetchKubernetesDeploymentDetail(
+  workspaceId: string,
+  deploymentId: string
+): Promise<KubernetesDeploymentOperation> {
+  return apiRequest<KubernetesDeploymentOperation>(
+    `/api/workspaces/${workspaceId}/deployments/${deploymentId}`
+  );
+}
+
+export function fetchKubernetesDeploymentStatus(
+  workspaceId: string,
+  deploymentId: string
+): Promise<KubernetesDeploymentStatusSnapshot> {
+  return apiRequest<KubernetesDeploymentStatusSnapshot>(
+    `/api/workspaces/${workspaceId}/deployments/${deploymentId}/status`
+  );
+}
+
+export function fetchKubernetesDeploymentEvents(
+  workspaceId: string,
+  deploymentId: string
+): Promise<KubernetesDeploymentEvent[]> {
+  return apiRequest<KubernetesDeploymentEvent[]>(
+    `/api/workspaces/${workspaceId}/deployments/${deploymentId}/events`
+  );
+}
+
+export function cancelKubernetesDeployment(
+  workspaceId: string,
+  deploymentId: string,
+  reason?: string
+): Promise<KubernetesDeploymentOperation> {
+  return apiRequest<KubernetesDeploymentOperation>(
+    `/api/workspaces/${workspaceId}/deployments/${deploymentId}/cancel`,
+    {
+      method: 'POST',
+      body: reason && reason.trim() ? { reason: reason.trim() } : {},
+    }
   );
 }
 

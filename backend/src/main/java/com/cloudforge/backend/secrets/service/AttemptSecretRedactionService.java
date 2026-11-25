@@ -1,5 +1,6 @@
 package com.cloudforge.backend.secrets.service;
 
+import com.cloudforge.backend.k8s.service.ClusterCredentialResolver;
 import com.cloudforge.backend.oci.service.RegistryCredentialResolver;
 import com.cloudforge.backend.secrets.crypto.SecretCryptoException;
 import com.cloudforge.backend.secrets.crypto.SecretKeyProvider;
@@ -27,17 +28,20 @@ public class AttemptSecretRedactionService {
     private final SecretManagementService secretManagementService;
     private final PipelineRunSecretReferenceRepository secretReferenceRepository;
     private final RegistryCredentialResolver registryCredentialResolver;
+    private final ClusterCredentialResolver clusterCredentialResolver;
 
     public AttemptSecretRedactionService(
             SecretKeyProvider keyProvider,
             SecretManagementService secretManagementService,
             PipelineRunSecretReferenceRepository secretReferenceRepository,
-            RegistryCredentialResolver registryCredentialResolver
+            RegistryCredentialResolver registryCredentialResolver,
+            ClusterCredentialResolver clusterCredentialResolver
     ) {
         this.keyProvider = keyProvider;
         this.secretManagementService = secretManagementService;
         this.secretReferenceRepository = secretReferenceRepository;
         this.registryCredentialResolver = registryCredentialResolver;
+        this.clusterCredentialResolver = clusterCredentialResolver;
     }
 
     @Transactional(readOnly = true)
@@ -49,6 +53,7 @@ public class AttemptSecretRedactionService {
         UUID stageRunId = attempt.getStageRun().getId();
         values.addAll(resolveSecretsForStageRedaction(stageRunId, attempt.getStageRun().isHasSecretBindings()));
         values.addAll(registryCredentialResolver.resolveSecretsForPublishAttemptRedaction(attempt));
+        values.addAll(clusterCredentialResolver.resolveSecretsForDeploymentAttemptRedaction(attempt));
         return values;
     }
 

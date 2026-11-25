@@ -1,6 +1,6 @@
 # CloudForge Development Roadmap
 
-This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.5)** functionality from **Planned (Phases 3.6–4)** capabilities.
+This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.6)** functionality from **Planned (Phases 3.7–4)** capabilities.
 
 ---
 
@@ -89,11 +89,22 @@ This roadmap clearly distinguishes **Implemented (Phases 1–2, Phases 3.1–3.5
 
 ---
 
-## Phases 3.6–3.7 — Hardened Multi-Tenant Sandboxing, Kubernetes & Rollback (**Planned**)
+## Phase 3.6 — Secure Kubernetes Deployment Engine, Cluster Integration & Rolling Updates (**Implemented — Local/Approved-Cluster Scope**)
+
+- [x] **PostgreSQL Persistence (`V9__kubernetes_deployment_engine.sql`):** Non-destructive Flyway migration extending `worker_nodes` (`KUBERNETES_DEPLOY`) and `stage_execution_attempts` (13 Kubernetes failure categories) and adding `kubernetes_cluster_connections`, `kubernetes_namespace_bindings`, `kubernetes_deployment_configs`, `kubernetes_deployment_operations`, and `kubernetes_deployment_events` (36 application tables total, preserving immutable release evidence for future Phase 3.7 rollback).
+- [x] **Control-Plane / Execution-Plane Boundary & Render Safety:** Zero `kubectl`, kubeconfig mounts, or Kubernetes API client dependencies in `backend/`. All Kubernetes feature flags default to `false` and are explicitly locked `false` in `application-render.yml`.
+- [x] **Cluster Connection Management & Worker-Side Validation (`ClusterSecurityValidator`, `KubernetesClusterService`, `KubernetesClusterValidator`):** `OWNER`-only registration with HTTPS-only URLs, public X.509 CA PEM pinning (rejecting private keys/kubeconfigs), operator API host allowlist & SSRF blocking, Phase 3.4 AES-256-GCM encrypted secret references for least-privilege ServiceAccount bearer tokens, and dedicated `KUBERNETES_DEPLOY` worker validation (`/version`, `apps/v1`, `SelfSubjectAccessReview` least-privilege checks rejecting cluster-admin, and namespace verification).
+- [x] **Operator-Approved Namespace Isolation & Templates (`infrastructure/kubernetes/`):** Deterministic DNS-1123 namespace naming (`cf-<ws8>-<project>-<env>`), blocking of `default`/`kube-system`/`kube-*`/`openshift-*` namespaces, version-controlled templates for Restricted Pod Security Admission, `ResourceQuota`, `LimitRange`, `Role`/`RoleBinding`/`ServiceAccount`, default-deny `NetworkPolicy`, and local provisioning & RBAC verification scripts.
+- [x] **Declarative Workload Model & Hardened Manifest Generation (`KubernetesDeploymentConfigValidator`, `KubernetesManifestGenerator`, `KubernetesManifestBuilder`):** Supports strictly `apps/v1 Deployment` + `v1 ClusterIP Service` consuming verified immutable Phase 3.5 `@sha256:` OCI artifacts (no arbitrary user YAML), enforcing non-root UID, `allowPrivilegeEscalation: false`, `capabilities.drop=[ALL]`, `RuntimeDefault` seccomp, bounded CPU/memory requests & limits, HTTP/TCP readiness/liveness/startup probes, `RollingUpdate` bounds, CloudForge ownership labels, and identical backend/worker SHA-256 manifest checksums.
+- [x] **Dedicated `KUBERNETES_DEPLOY` Worker Execution (`OfficialKubernetesApiClient`, `KubernetesDeploymentExecutor`, `WorkerAgentLoop`):** Official Java 17 Kubernetes client (`io.kubernetes:client-java:21.0.2`) with unconditional `setVerifyingSsl(true)`, `followRedirects(false)`, SSRF-safe OkHttp `Dns`, Server-Side Apply (`fieldManager="cloudforge-deployment-worker"`, `force=false`), ownership-label overwrite guard, live rollout & pod diagnostics observation (`ImagePullBackOff`, `CrashLoopBackOff`, `Unschedulable`, `ProgressDeadlineExceeded`, `ResourceQuota`, readiness failures), strict readiness + digest verification before `SUCCEEDED`, post-apply cancellation & expired-lease crash reconciliation (`RECONCILIATION_REQUIRED`, never blind replay or resource deletion), and explicit `OWNER` production approval gate.
+- [x] **Workspace-Scoped REST APIs & Premium Deployments Console (`DeploymentsPage.tsx` & `CloudForgePipelinesPanel.tsx`):** Full functional Deployments console replacing the Phase 1 placeholder (overview telemetry, honest safe-default notice, deployment history with replica readiness progressbars and copyable immutable digests, cluster & namespace management, declarative deployment form with production approval gate, deployment detail inspection with live Refresh Status, Pod Diagnostics, lifecycle events, and confirmation-gated cancellation) plus `KUBERNETES_DEPLOY` stage support in DAG pipelines. See `docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`.
+
+---
+
+## Phase 3.7 — Hardened Multi-Tenant Sandboxing, Deployment History & Rollback (**Planned**)
 
 - [ ] **MicroVM / Hardened Sandbox Isolation:** Introduce gVisor / Kata / Firecracker sandboxed execution before permitting hostile/untrusted multi-tenant repository builds.
-- [ ] **Phase 3.6 — Kubernetes Orchestration (`infrastructure/kubernetes/`):** Deploy immutable verified OCI image digests to controlled local (kind/k3d) and remote Kubernetes namespaces using least-privilege service accounts, readiness/liveness probes, and `NetworkPolicy` isolation.
-- [ ] **Phase 3.7 — Deployment History & Rollback:** Persist every release revision (commit SHA, image digest, manifest checksum, actor, outcome) and provide one-click rollback to previously verified healthy releases.
+- [ ] **Phase 3.7 — Release Revision History & Rollback:** Build on the immutable Phase 3.6 deployment evidence (`kubernetes_deployment_operations`: commit SHA, `@sha256:` image digest, manifest SHA-256 checksum, config snapshot, actor, outcome) to provide audited, one-click rollback and release diffing to previously verified healthy revisions.
 
 ---
 

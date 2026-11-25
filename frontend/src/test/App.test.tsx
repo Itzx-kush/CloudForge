@@ -251,6 +251,36 @@ function createAuthenticatedFetchMock(overrides?: {
         totalPages: 1,
       });
     }
+    if (url.includes('/kubernetes/status')) {
+      return jsonResponse({
+        kubernetesEnabled: false,
+        allowLocalDevClusters: false,
+        allowProductionDeployments: false,
+        allowedApiHosts: [],
+        maxReplicas: 20,
+        maxDeploymentTimeoutSeconds: 600,
+        configuredClusters: 0,
+        validatedClusters: 0,
+        activeNamespaceBindings: 0,
+        totalDeployments: 0,
+        runningDeployments: 0,
+        succeededDeployments: 0,
+        failedDeployments: 0,
+        activeDeployWorkers: 0,
+      });
+    }
+    if (url.includes('/clusters') || url.includes('/namespaces') || url.includes('/deployment-configs')) {
+      return jsonResponse([]);
+    }
+    if (url.includes('/deployments') || url.includes('/artifacts')) {
+      return jsonResponse({
+        items: [],
+        page: 0,
+        size: 25,
+        totalElements: 0,
+        totalPages: 0,
+      });
+    }
     return jsonResponse({}, 200);
   });
 }

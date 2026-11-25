@@ -1,0 +1,28 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudforge-deployer-role
+  namespace: cf-example-app-dev
+  labels:
+    app.kubernetes.io/managed-by: cloudforge
+rules:
+  # Manage approved Deployments within this namespace only (no wildcard resources/verbs)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  # Inspect ReplicaSets for rollout status diagnostics
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list"]
+  # Manage ClusterIP Services within this namespace only
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  # Inspect Pods and Events for rollout readiness and failure detection
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  # Deliberately omitted: secrets, rolebindings, roles, serviceaccounts, namespaces, pods/exec, pods/attach

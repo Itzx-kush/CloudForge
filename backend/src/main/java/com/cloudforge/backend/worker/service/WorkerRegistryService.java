@@ -5,6 +5,7 @@ import com.cloudforge.backend.entity.WorkspaceRole;
 import com.cloudforge.backend.exception.BadRequestException;
 import com.cloudforge.backend.exception.ForbiddenOperationException;
 import com.cloudforge.backend.exception.ResourceNotFoundException;
+import com.cloudforge.backend.k8s.config.KubernetesDeploymentProperties;
 import com.cloudforge.backend.orchestration.entity.PipelineStageRunEntity;
 import com.cloudforge.backend.orchestration.entity.PipelineStageStatus;
 import com.cloudforge.backend.orchestration.repository.PipelineStageRunRepository;
@@ -48,6 +49,7 @@ import java.util.UUID;
 public class WorkerRegistryService {
 
     private final WorkerProperties workerProperties;
+    private final KubernetesDeploymentProperties k8sProperties;
     private final WorkerNodeRepository workerNodeRepository;
     private final StageExecutionAttemptRepository attemptRepository;
     private final PipelineStageRunRepository stageRunRepository;
@@ -56,6 +58,7 @@ public class WorkerRegistryService {
 
     public WorkerRegistryService(
             WorkerProperties workerProperties,
+            KubernetesDeploymentProperties k8sProperties,
             WorkerNodeRepository workerNodeRepository,
             StageExecutionAttemptRepository attemptRepository,
             PipelineStageRunRepository stageRunRepository,
@@ -63,6 +66,7 @@ public class WorkerRegistryService {
             ObjectMapper objectMapper
     ) {
         this.workerProperties = workerProperties;
+        this.k8sProperties = k8sProperties;
         this.workerNodeRepository = workerNodeRepository;
         this.attemptRepository = attemptRepository;
         this.stageRunRepository = stageRunRepository;
@@ -83,7 +87,9 @@ public class WorkerRegistryService {
         String sourceOperation = AllowedWorkerOperation.GITHUB_SOURCE_ACQUIRE.name();
         String ociBuildOp = AllowedWorkerOperation.OCI_IMAGE_BUILD.name();
         String ociPublishOp = AllowedWorkerOperation.OCI_IMAGE_PUBLISH.name();
+        String k8sDeployOp = AllowedWorkerOperation.KUBERNETES_DEPLOY.name();
         boolean advertisesOci = normalizedOps.contains(ociBuildOp) || normalizedOps.contains(ociPublishOp);
+        boolean advertisesK8s = normalizedOps.contains(k8sDeployOp);
         if (request.adapterType() == WorkerAdapterType.GITHUB_SOURCE
                 ? !normalizedOps.equals(List.of(sourceOperation)) || request.maxConcurrency() != 1
                 : normalizedOps.contains(sourceOperation)) {
@@ -97,6 +103,19 @@ public class WorkerRegistryService {
             }
         } else if (advertisesOci) {
             throw new BadRequestException("OCI build and publish operations require a dedicated OCI_BUILDKIT worker");
+        }
+        if (request.adapterType() == WorkerAdapterType.KUBERNETES_DEPLOY) {
+            if (!k8sProperties.isEnabled()
+                    || !k8sProperties.parsedAllowedWorkerIds().contains(principal.workerId())) {
+                throw new ForbiddenOperationException(
+                        "Worker \"" + principal.workerId() + "\" is not authorized for KUBERNETES_DEPLOY execution"
+                );
+            }
+            if (!normalizedOps.equals(List.of(k8sDeployOp)) || request.maxConcurrency() > 2) {
+                throw new BadRequestException("KUBERNETES_DEPLOY workers may only advertise KUBERNETES_DEPLOY with maxConcurrency <= 2");
+            }
+        } else if (advertisesK8s) {
+            throw new BadRequestException("Kubernetes deployment requires a dedicated KUBERNETES_DEPLOY worker");
         }
         Instant now = Instant.now();
 

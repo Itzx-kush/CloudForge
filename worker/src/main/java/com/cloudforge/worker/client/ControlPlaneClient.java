@@ -106,6 +106,60 @@ public interface ControlPlaneClient {
         throw new UnsupportedOperationException("OCI publish result reporting is unavailable");
     }
 
+    default Optional<ClusterValidationTask> claimClusterValidation(String workerId) {
+        return Optional.empty();
+    }
+
+    default ClusterCredentialsResult fetchClusterValidationCredentials(
+            String workerId,
+            UUID clusterId,
+            long validationNonce
+    ) {
+        throw new UnsupportedOperationException("Kubernetes cluster validation credential delivery is unavailable");
+    }
+
+    default void completeClusterValidation(
+            String workerId,
+            UUID clusterId,
+            ClusterValidationResultPayload payload
+    ) {
+        throw new UnsupportedOperationException("Kubernetes cluster validation completion is unavailable");
+    }
+
+    default KubernetesExecutionDescriptor fetchKubernetesDescriptor(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        throw new UnsupportedOperationException("Kubernetes deployment descriptor fetch is unavailable");
+    }
+
+    default ClusterCredentialsResult fetchKubernetesDeploymentCredentials(
+            String workerId,
+            UUID attemptId,
+            String leaseToken,
+            long fencingGeneration
+    ) {
+        throw new UnsupportedOperationException("Kubernetes deployment credential delivery is unavailable");
+    }
+
+    default void reportKubernetesStatus(
+            String workerId,
+            UUID attemptId,
+            KubernetesStatusUpdatePayload payload
+    ) {
+        throw new UnsupportedOperationException("Kubernetes deployment status update is unavailable");
+    }
+
+    default void reportKubernetesResult(
+            String workerId,
+            UUID attemptId,
+            KubernetesResultPayload payload
+    ) {
+        throw new UnsupportedOperationException("Kubernetes deployment result reporting is unavailable");
+    }
+
     void appendLogs(String workerId, UUID attemptId, String leaseToken, long fencingGeneration, List<LogEntry> entries);
 
     void completeAttempt(String workerId, UUID attemptId, CompletionPayload payload);
@@ -372,6 +426,141 @@ public interface ControlPlaneClient {
             Instant startedAt,
             Instant completedAt,
             boolean terminationConfirmed
+    ) {
+    }
+
+    record KubernetesProbeSpec(
+            String type,
+            String path,
+            Integer port,
+            Integer initialDelaySeconds,
+            Integer periodSeconds,
+            Integer timeoutSeconds,
+            Integer failureThreshold,
+            Integer successThreshold
+    ) {
+    }
+
+    record ClusterValidationTask(
+            UUID clusterId,
+            UUID workspaceId,
+            String clusterIdentifier,
+            String clusterName,
+            String clusterType,
+            String apiServerUrl,
+            String caCertificateFingerprintSha256,
+            String serviceAccountName,
+            boolean allowLocalLoopback,
+            long validationNonce,
+            List<String> expectedNamespaces
+    ) {
+    }
+
+    record ClusterCredentialsResult(
+            UUID clusterId,
+            String apiServerUrl,
+            String caCertificatePem,
+            String bearerToken,
+            String serviceAccountName,
+            boolean allowLocalLoopback,
+            Instant deliveredAt
+    ) {
+        @Override
+        public String toString() {
+            return "ClusterCredentialsResult[clusterId=" + clusterId
+                    + ", apiServerUrl=" + apiServerUrl + ", bearerToken=[REDACTED]]";
+        }
+    }
+
+    record ClusterValidationResultPayload(
+            long validationNonce,
+            boolean valid,
+            String kubernetesVersion,
+            Map<String, Object> supportedCapabilities,
+            List<String> verifiedNamespaces,
+            String errorSummary,
+            Instant validatedAt
+    ) {
+    }
+
+    record KubernetesExecutionDescriptor(
+            UUID deploymentOperationId,
+            UUID workspaceId,
+            UUID projectId,
+            UUID environmentId,
+            String environmentType,
+            UUID clusterConnectionId,
+            String clusterIdentifier,
+            String apiServerUrl,
+            boolean allowLocalLoopback,
+            UUID namespaceBindingId,
+            String namespaceName,
+            String workloadServiceAccountName,
+            String imagePullSecretName,
+            UUID deploymentConfigId,
+            UUID ociArtifactId,
+            String deploymentName,
+            String serviceName,
+            String immutableImageReference,
+            String manifestDigest,
+            String sourceCommitSha,
+            String manifestChecksumSha256,
+            int replicaCount,
+            int containerPort,
+            int servicePort,
+            String cpuRequest,
+            String cpuLimit,
+            String memoryRequest,
+            String memoryLimit,
+            KubernetesProbeSpec readinessProbe,
+            KubernetesProbeSpec livenessProbe,
+            KubernetesProbeSpec startupProbe,
+            String rollingMaxSurge,
+            String rollingMaxUnavailable,
+            int progressDeadlineSeconds,
+            int deploymentTimeoutSeconds,
+            boolean readOnlyRootFilesystem,
+            boolean runAsNonRoot,
+            long runAsUser
+    ) {
+    }
+
+    record KubernetesStatusUpdatePayload(
+            String leaseToken,
+            long fencingGeneration,
+            String status,
+            boolean applyInitiated,
+            Integer observedReplicas,
+            Integer updatedReplicas,
+            Integer readyReplicas,
+            Integer availableReplicas,
+            Long observedGeneration,
+            String k8sDeploymentUid,
+            String k8sServiceUid,
+            List<Map<String, Object>> rolloutConditions,
+            List<Map<String, Object>> podDiagnostics,
+            String message
+    ) {
+    }
+
+    record KubernetesResultPayload(
+            String leaseToken,
+            long fencingGeneration,
+            String status,
+            boolean applyInitiated,
+            Integer observedReplicas,
+            Integer updatedReplicas,
+            Integer readyReplicas,
+            Integer availableReplicas,
+            Long observedGeneration,
+            String k8sDeploymentUid,
+            String k8sServiceUid,
+            String verifiedImageDigest,
+            List<Map<String, Object>> rolloutConditions,
+            List<Map<String, Object>> podDiagnostics,
+            String failureCategory,
+            String errorSummary,
+            Instant completedAt
     ) {
     }
 }

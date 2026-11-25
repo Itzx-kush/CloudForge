@@ -35,6 +35,12 @@ public enum AllowedWorkerOperation {
             false,
             "Publishes a built OCI image layout to an approved registry and verifies its immutable SHA-256 digest"
     ),
+    KUBERNETES_DEPLOY(
+            "Kubernetes Rolling Deployment",
+            EnumSet.of(PipelineStageType.DEPLOYMENT),
+            false,
+            "Deploys a verified immutable OCI image digest to an approved Kubernetes namespace using least-privilege RBAC and verifies rollout readiness"
+    ),
     ENV_VALIDATION(
             "Environment Validation",
             EnumSet.of(PipelineStageType.SOURCE_PREP),
@@ -97,6 +103,10 @@ public enum AllowedWorkerOperation {
         return this == OCI_IMAGE_BUILD || this == OCI_IMAGE_PUBLISH;
     }
 
+    public boolean isKubernetesOperation() {
+        return this == KUBERNETES_DEPLOY;
+    }
+
     public static Optional<AllowedWorkerOperation> parseStrict(String raw) {
         if (raw == null || raw.isBlank()) {
             return Optional.empty();
@@ -145,7 +155,7 @@ public enum AllowedWorkerOperation {
             case CONTAINER_PACKAGE ->
                     "Declarative stage only — select OCI_IMAGE_PUBLISH (Phase 3.5 OCI BuildKit worker) with an approved registry connection to publish and verify immutable digests.";
             case DEPLOYMENT ->
-                    "Unsupported in Phase 3.3 — Kubernetes workload deployment is planned for Phase 3.6.";
+                    "Declarative stage only — select KUBERNETES_DEPLOY (Phase 3.6 Kubernetes deployment worker) with an approved validated cluster and namespace binding.";
         };
     }
 }
