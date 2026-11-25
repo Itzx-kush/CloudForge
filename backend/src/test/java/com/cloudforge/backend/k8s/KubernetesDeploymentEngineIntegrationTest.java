@@ -791,12 +791,22 @@ class KubernetesDeploymentEngineIntegrationTest {
         assertThat(operationRepository.findById(depId).orElseThrow().getStatus())
                 .isEqualTo(KubernetesDeploymentStatus.RECONCILIATION_REQUIRED);
 
-        // Case 2: Active deployment cancelled AFTER applyInitiated=true -> RECONCILIATION_REQUIRED
+        String unresolvedWorkload = deployJson(projectA.getId(), devEnv.getId(), target.clusterId(),
+                target.namespaceId(), verifiedArtifact.getId(), 2);
+        mockMvc.perform(post("/api/workspaces/{ws}/deployments", workspaceA.getId())
+                        .with(authenticatedUser(owner)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content(unresolvedWorkload))
+                .andExpect(status().isConflict());
+
+        // Exercise post-apply cancellation on another workload while the first requires reconciliation.
+        var anotherWorkload = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(unresolvedWorkload);
+        anotherWorkload.put("deploymentName", "payments-cancel");
+        anotherWorkload.put("serviceName", "payments-cancel");
         MvcResult createDep2 = mockMvc.perform(post("/api/workspaces/{ws}/deployments", workspaceA.getId())
                         .with(authenticatedUser(owner)).with(csrf())
                         .header("Idempotency-Key", "k8s-cancel-" + UUID.randomUUID())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(deployJson(projectA.getId(), devEnv.getId(), target.clusterId(), target.namespaceId(), verifiedArtifact.getId(), 2)))
+                        .content(objectMapper.writeValueAsString(anotherWorkload)))
                 .andExpect(status().isCreated())
                 .andReturn();
         UUID dep2Id = UUID.fromString(objectMapper.readTree(createDep2.getResponse().getContentAsString()).get("id").asText());
