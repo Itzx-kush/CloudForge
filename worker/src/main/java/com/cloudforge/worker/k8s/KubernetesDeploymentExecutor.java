@@ -461,6 +461,13 @@ public class KubernetesDeploymentExecutor {
             }
             return true;
         }
+        // Kubernetes omits these zero-valued fields when serializing a Pod or a probe.
+        if (actual.isMissingNode()
+                && ((List.of("hostIPC", "hostNetwork", "hostPID").contains(key)
+                        && desired.isBoolean() && !desired.booleanValue())
+                    || ("initialDelaySeconds".equals(key) && desired.isIntegralNumber() && desired.intValue() == 0))) {
+            return true;
+        }
         if (("cpu".equals(key) || "memory".equals(key)) && desired.isTextual() && actual.isTextual()) {
             return Quantity.fromString(desired.asText()).getNumber().compareTo(Quantity.fromString(actual.asText()).getNumber()) == 0;
         }

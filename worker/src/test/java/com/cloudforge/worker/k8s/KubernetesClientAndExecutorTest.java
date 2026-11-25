@@ -387,7 +387,10 @@ class KubernetesClientAndExecutorTest {
                 base.namespaceName(), 2, 2, 2, 2, 2, 2, 2, manifests.selectorLabels(),
                 List.of(base.immutableImageReference()),
                 List.of(new KubernetesApiClient.DeploymentConditionInfo("Available", "True", "Ready", "Ready")),
-                "42", manifests.deploymentJson());
+                "42", manifests.deploymentJson()
+                        .replace("\"hostIPC\":false,", "")
+                        .replace("\"hostNetwork\":false,", "")
+                        .replace("\"hostPID\":false,", ""));
         stub.liveService = new KubernetesApiClient.ServiceSnapshot("live-svc", base.serviceName(),
                 base.namespaceName(), "ClusterIP", manifests.selectorLabels(), "43", manifests.serviceJson());
 

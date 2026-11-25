@@ -620,7 +620,7 @@ describe('CloudForge Phase 3.6 Kubernetes Deployment Console UI', () => {
     expect(captured[0].body.namespaceBindingId).toBe('ns-1');
   });
 
-  it('requires explicit confirmation before cancelling an active rollout and explains non-rollback Phase 3.6 semantics', async () => {
+  it('requires explicit confirmation before cancelling an active rollout and explains recovery', async () => {
     const cancelHeaders: Headers[] = [];
     installMockApi({
       role: 'OWNER',
@@ -647,7 +647,7 @@ describe('CloudForge Phase 3.6 Kubernetes Deployment Console UI', () => {
 
     await user.click(within(dialog).getByRole('button', { name: /Cancel Deployment/i }));
     expect(within(dialog).getByText(/Confirm Deployment Cancellation/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/planned for Phase 3.7/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/inspect the live workload from Release History/i)).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole('button', { name: /Confirm Cancel/i }));
     await waitFor(() => {
