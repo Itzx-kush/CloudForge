@@ -32,6 +32,7 @@ import com.cloudforge.backend.oci.entity.OciRegistryType;
 import com.cloudforge.backend.oci.repository.OciBuildRecordRepository;
 import com.cloudforge.backend.oci.repository.OciImageArtifactRepository;
 import com.cloudforge.backend.oci.repository.OciRegistryConnectionRepository;
+import com.cloudforge.backend.orchestration.dto.CancelPipelineRunRequest;
 import com.cloudforge.backend.orchestration.dto.CreatePipelineDefinitionRequest;
 import com.cloudforge.backend.orchestration.dto.CreatePipelineRunRequest;
 import com.cloudforge.backend.orchestration.dto.StageDefinitionRequest;
@@ -67,6 +68,7 @@ import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -85,6 +87,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -184,6 +187,16 @@ class KubernetesDeploymentEngineIntegrationTest {
     private OciImageArtifactEntity verifiedArtifact;
     private OciImageArtifactEntity unverifiedArtifact;
     private OciImageArtifactEntity otherProjectArtifact;
+
+    private final List<UUID> releaseFixtureRuns = new ArrayList<>();
+
+    @AfterEach
+    void cancelUnclaimedReleaseFixtureRuns() {
+        for (UUID runId : releaseFixtureRuns) {
+            pipelineOrchestrationService.cancelRun(workspaceA.getId(), runId,
+                    new CancelPipelineRunRequest("Release fixture cleanup"), owner);
+        }
+    }
 
     private final String k8sWorker1Id = "k8s-worker-1";
     private final String k8sWorker1Secret = "k8s-worker-1-secret-token-1234567890";
@@ -1022,7 +1035,9 @@ class KubernetesDeploymentEngineIntegrationTest {
                 .andExpect(jsonPath("$.operation.status").value("PENDING"))
                 .andExpect(jsonPath("$.operation.requestedReplicas").value(1))
                 .andReturn();
-        var rollbackId = objectMapper.readTree(response.getResponse().getContentAsString()).at("/operation/id").asText();
+        var rollbackOperation = objectMapper.readTree(response.getResponse().getContentAsString()).get("operation");
+        releaseFixtureRuns.add(UUID.fromString(rollbackOperation.get("pipelineRunId").asText()));
+        var rollbackId = rollbackOperation.get("id").asText();
 
         rollbackRequest(asJson(rollbackJson), first, developer, "rollback-correct")
                 .andExpect(status().isAccepted()).andExpect(jsonPath("$.operation.id").value(rollbackId));
@@ -1048,11 +1063,13 @@ class KubernetesDeploymentEngineIntegrationTest {
         mockMvc.perform(post("/api/workspaces/{ws}/deployments/{release}/reconcile", workspaceA.getId(), uncertainId)
                         .with(authenticatedUser(developer)).with(csrf()).header("Idempotency-Key", "observe-denied"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/api/workspaces/{ws}/deployments/{release}/reconcile", workspaceA.getId(), uncertainId)
+        var observation = mockMvc.perform(post("/api/workspaces/{ws}/deployments/{release}/reconcile", workspaceA.getId(), uncertainId)
                         .with(authenticatedUser(owner)).with(csrf()).header("Idempotency-Key", "observe-release"))
                 .andExpect(status().isAccepted()).andExpect(jsonPath("$.kind").value("RECONCILIATION"))
                 .andExpect(jsonPath("$.operation.applyInitiated").value(false))
-                .andExpect(jsonPath("$.expectedOperationId").value(uncertainId.toString()));
+                .andExpect(jsonPath("$.expectedOperationId").value(uncertainId.toString())).andReturn();
+        releaseFixtureRuns.add(UUID.fromString(objectMapper.readTree(observation.getResponse().getContentAsString())
+                .at("/operation/pipelineRunId").asText()));
         assertThat(operationRepository.findById(uncertainId).orElseThrow().getStatus())
                 .isEqualTo(KubernetesDeploymentStatus.RECONCILIATION_REQUIRED);
     }
@@ -1074,7 +1091,9 @@ class KubernetesDeploymentEngineIntegrationTest {
                         .content(deployJson(projectA.getId(), devEnv.getId(), target.clusterId(), target.namespaceId(),
                                 verifiedArtifact.getId(), replicas)))
                 .andExpect(status().isCreated()).andReturn();
-        return UUID.fromString(objectMapper.readTree(queued.getResponse().getContentAsString()).get("id").asText());
+        var operation = objectMapper.readTree(queued.getResponse().getContentAsString());
+        releaseFixtureRuns.add(UUID.fromString(operation.get("pipelineRunId").asText()));
+        return UUID.fromString(operation.get("id").asText());
     }
 
     private void recordVerifiedFixture(UUID id, long generation) {

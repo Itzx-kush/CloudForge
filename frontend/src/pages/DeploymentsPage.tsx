@@ -1036,8 +1036,8 @@ export function DeploymentsPage() {
       description="Secure Kubernetes deployment console for approved clusters, isolated namespaces, and immutable digest-verified rolling updates."
       phaseBadge={{
         label: subsystemStatus?.kubernetesEnabled
-          ? 'Phase 3.6 · Kubernetes Engine Active'
-          : 'Phase 3.6 · Kubernetes Engine (Safe Default)',
+          ? 'Kubernetes Engine Active'
+          : 'Kubernetes Engine Disabled',
         tone: subsystemStatus?.kubernetesEnabled ? 'healthy' : 'info',
       }}
       actions={
@@ -2151,10 +2151,8 @@ export function DeploymentsPage() {
                 <div style={{ flex: 1 }}>
                   <p className="cf-notice__title">Confirm Deployment Cancellation</p>
                   <p className="cf-notice__text">
-                    Cancelling halts further worker writes and marks the operation Cancelled or
-                    Reconciliation Required if Kubernetes apply already began. CloudForge does not
-                    delete workloads or perform automatic rollback in Phase 3.6 (planned for Phase
-                    3.7).
+                    Cancelling stops further worker writes. If Kubernetes apply already began,
+                    inspect the live workload from Release History before requesting another change.
                   </p>
                   <div className="cf-inline-actions" style={{ marginTop: '8px' }}>
                     <button

@@ -362,6 +362,15 @@
   max-width: 100%;
 }
 
+.cf-release-name-filter {
+  width: 12rem;
+}
+
+.cf-release-timeline .cf-badge,
+.cf-release-differences .cf-badge {
+  justify-self: start;
+}
+
 .cf-release-timeline,
 .cf-release-events {
   list-style: none;
@@ -379,7 +388,7 @@
 }
 
 .cf-release-timeline li > div,
-.cf-release-differences span,
+.cf-release-value,
 .cf-release-preview {
   display: grid;
   gap: 0.35rem;
@@ -388,7 +397,7 @@
 
 .cf-release-timeline span,
 .cf-release-detail dd,
-.cf-release-differences span,
+.cf-release-value,
 .cf-release-preview code {
   overflow-wrap: anywhere;
 }

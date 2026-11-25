@@ -723,7 +723,7 @@ public class KubernetesDeploymentExecutor {
             Instant startedAt
     ) {
         return new DeploymentExecutionOutcome(
-                "CANCELLED",
+                applyInitiated ? "RECONCILIATION_REQUIRED" : "CANCELLED",
                 "CANCELLED",
                 applyInitiated,
                 snap != null ? snap.statusReplicas() : 0,

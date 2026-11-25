@@ -31,8 +31,8 @@ function DifferenceTable({ comparison }: { comparison: ReleaseComparison }) {
       {comparison.fields.map(({ field, before, after, changed }) => (
         <div key={field} className={changed ? 'cf-release-difference--changed' : ''}>
           <strong>{field}</strong>
-          <span><small>Before</small>{valueText(before)}</span>
-          <span><small>After</small>{valueText(after)}</span>
+          <span className="cf-release-value"><small>Before</small>{valueText(before)}</span>
+          <span className="cf-release-value"><small>After</small>{valueText(after)}</span>
           <StatusBadge label={changed ? 'Changed' : 'Unchanged'} tone={changed ? 'info' : 'neutral'} size="sm" />
         </div>
       ))}
@@ -196,7 +196,7 @@ export function ReleaseHistoryPanel({ workspace, isOwner, canRequest, executionA
           <option value="FAILED">Failed</option><option value="RECONCILIATION_REQUIRED">Reconciliation required</option>
           <option value="PENDING">Pending</option><option value="CANCELLED">Cancelled</option>
         </select>
-        <input aria-label="Filter by exact deployment name" placeholder="Deployment name" value={deployment}
+        <input className="cf-input cf-release-name-filter" aria-label="Filter by exact deployment name" placeholder="Deployment name" value={deployment}
           onChange={(e) => { setDeployment(e.target.value); setPage(0); }} />
       </div>
       {loadError && <p role="alert">{loadError}</p>}
@@ -291,7 +291,7 @@ export function ReleaseHistoryPanel({ workspace, isOwner, canRequest, executionA
             {preview.comparison && <DifferenceTable comparison={preview.comparison} />}
             {!preview.eligible ? <p role="status">{preview.blockedReason}</p> : <>
               <label htmlFor="cf-rollback-reason">Rollback reason</label>
-              <textarea id="cf-rollback-reason" value={reason} minLength={8} maxLength={128} required
+              <textarea className="cf-textarea" id="cf-rollback-reason" value={reason} minLength={8} maxLength={128} required
                 onChange={(e) => setReason(e.target.value)} />
               <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} required />{' '}
                 {preview.productionApprovalRequired ? 'I approve restoring this release in production.' : 'I confirm this release and target.'}
