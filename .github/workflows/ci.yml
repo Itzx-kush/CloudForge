@@ -177,6 +177,7 @@ jobs:
       - name: Scan source dependencies and secrets, then scan frontend image
         run: |
           set -euo pipefail
+          rejected=0
           for target in source image; do
             report="$RUNNER_TEMP/$target-scan.json"
             if [[ "$target" == source ]]; then
@@ -186,5 +187,10 @@ jobs:
             fi
             count=$(jq '[.Results[]? | (.Vulnerabilities[]?, .Secrets[]?)] | length' "$report")
             echo "$target high or critical findings: $count" >> "$GITHUB_STEP_SUMMARY"
-            if [[ "$count" != 0 ]]; then echo "::error::Security policy rejected $target"; exit 3; fi
+            if [[ "$count" != 0 ]]; then
+              jq -r '.Results[]? | .Target as $path | (.Vulnerabilities[]? | [$path,.PkgName,.InstalledVersion,.VulnerabilityID,.FixedVersion]), (.Secrets[]? | [$path,.RuleID]) | @tsv' "$report" | sort -u
+              echo "::error::Security policy rejected $target"
+              rejected=1
+            fi
           done
+          test "$rejected" = 0
