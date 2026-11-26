@@ -1,10 +1,12 @@
-import { Activity, BarChart3, LineChart, RefreshCw, Terminal } from 'lucide-react';
+import { Activity, RefreshCw, Terminal } from 'lucide-react';
 import { DashboardCard } from '../components/DashboardCard';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { PageContainer } from '../components/PageContainer';
 import { StatusBadge } from '../components/StatusBadge';
 import type { BackendHealthState } from '../hooks/useBackendHealth';
+import { WorkspaceOperations } from './WorkspaceOperations';
+import { useAuth } from '../context/AuthContext';
 import './Pages.css';
 
 export interface MonitoringPageProps {
@@ -12,13 +14,14 @@ export interface MonitoringPageProps {
 }
 
 export function MonitoringPage({ healthState }: MonitoringPageProps) {
+  const { activeWorkspace } = useAuth();
   const { snapshot, isLoading, isRefreshing, refresh } = healthState;
   const payload = snapshot?.payload ?? null;
 
   return (
     <PageContainer
       title="Monitoring"
-      description="Live backend & PostgreSQL health inspection and planned Phase 4 Prometheus & Grafana observability stack."
+      description="Backend health, worker activity and signed artifact assessments."
       phaseBadge={{ label: 'Live Health Probe + Phase 4 Telemetry', tone: 'info' }}
       actions={
         <button
@@ -113,65 +116,7 @@ export function MonitoringPage({ healthState }: MonitoringPageProps) {
         </pre>
       </DashboardCard>
 
-      <div className="cf-grid cf-grid--2">
-        <DashboardCard
-          title="Prometheus Metrics Scraping"
-          subtitle="Planned Phase 4 time-series collection"
-          icon={<LineChart size={17} />}
-          headerAction={<StatusBadge label="Planned · Phase 4" tone="planned" size="sm" />}
-        >
-          <ul className="cf-subtle-list">
-            <li>
-              <div>
-                <div className="cf-subtle-list__title">Spring Boot Micrometer Exporter</div>
-                <div className="cf-subtle-list__desc">
-                  Expose JVM, HTTP latency percentiles, and HikariCP connection pool metrics via{' '}
-                  <span className="mono">/actuator/prometheus</span>.
-                </div>
-              </div>
-              <StatusBadge label="Planned" tone="planned" size="sm" />
-            </li>
-            <li>
-              <div>
-                <div className="cf-subtle-list__title">PostgreSQL &amp; Cluster Exporters</div>
-                <div className="cf-subtle-list__desc">
-                  Track query saturation, container CPU/memory throttling, and pod restarts.
-                </div>
-              </div>
-              <StatusBadge label="Planned" tone="planned" size="sm" />
-            </li>
-          </ul>
-        </DashboardCard>
-
-        <DashboardCard
-          title="Grafana Dashboards & Alerting"
-          subtitle="Planned Phase 4 visualization and SLO alerts"
-          icon={<BarChart3 size={17} />}
-          headerAction={<StatusBadge label="Planned · Phase 4" tone="planned" size="sm" />}
-        >
-          <ul className="cf-subtle-list">
-            <li>
-              <div>
-                <div className="cf-subtle-list__title">Provisioned Infrastructure Dashboards</div>
-                <div className="cf-subtle-list__desc">
-                  Version-controlled dashboard JSON definitions stored in{' '}
-                  <span className="mono">infrastructure/monitoring/</span>.
-                </div>
-              </div>
-              <StatusBadge label="Planned" tone="planned" size="sm" />
-            </li>
-            <li>
-              <div>
-                <div className="cf-subtle-list__title">Degradation &amp; Rollout Alerts</div>
-                <div className="cf-subtle-list__desc">
-                  Automated alerting on failed health checks, database disconnects, and error spikes.
-                </div>
-              </div>
-              <StatusBadge label="Planned" tone="planned" size="sm" />
-            </li>
-          </ul>
-        </DashboardCard>
-      </div>
+      {activeWorkspace && <WorkspaceOperations key={activeWorkspace.id} workspace={activeWorkspace.id} />}
 
       <DashboardCard
         title="Spring Boot Actuator Endpoints (Active in Phase 1)"

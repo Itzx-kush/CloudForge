@@ -55,6 +55,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.cloudforge.backend.supplychain.ArtifactEvidenceService;
+
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -97,6 +99,7 @@ public class KubernetesDeploymentLifecycleService {
     private final KubernetesManifestGenerator manifestGenerator;
     private final ClusterSecurityValidator clusterSecurityValidator;
     private final LogSanitizer logSanitizer;
+    private final ArtifactEvidenceService evidence;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
 
@@ -116,6 +119,7 @@ public class KubernetesDeploymentLifecycleService {
             KubernetesManifestGenerator manifestGenerator,
             ClusterSecurityValidator clusterSecurityValidator,
             LogSanitizer logSanitizer,
+            ArtifactEvidenceService evidence,
             AuditService auditService,
             ObjectMapper objectMapper
     ) {
@@ -134,6 +138,7 @@ public class KubernetesDeploymentLifecycleService {
         this.manifestGenerator = manifestGenerator;
         this.clusterSecurityValidator = clusterSecurityValidator;
         this.logSanitizer = logSanitizer;
+        this.evidence = evidence;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
     }
@@ -300,6 +305,12 @@ public class KubernetesDeploymentLifecycleService {
                 || !artifact.getImmutableReference().equals(op.getImmutableImageReference())
                 || !artifact.getManifestDigest().equals(op.getManifestDigest())) {
             throw new ConflictException("OCI artifact must be VERIFIED with a valid immutable SHA-256 digest");
+        }
+
+        if (op.getOperationKind() != KubernetesOperationKind.RECONCILIATION
+                && (op.getEnvironment().getEnvironmentType() == EnvironmentType.PRODUCTION
+                || cluster.getEnvironmentCategory() == EnvironmentType.PRODUCTION)) {
+            evidence.requireProductionApproval(artifact);
         }
 
         WorkerKubernetesDtos.ReleaseExecution releaseExecution = null;

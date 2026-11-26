@@ -1149,3 +1149,15 @@ export function reconcileRelease(workspace: string, id: string, candidateRelease
     headers: { 'Idempotency-Key': key },
   });
 }
+
+export interface SecurityAssessment {
+  artifact: string;
+  assessedAt: number;
+  critical: number;
+  high: number;
+  sbomSha256: string;
+}
+
+export function fetchSecurityAssessments(workspace: string) {
+  return apiRequest<SecurityAssessment[]>(`/api/workspaces/${workspace}/security/assessments`);
+}

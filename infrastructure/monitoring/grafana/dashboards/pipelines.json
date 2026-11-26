@@ -1,0 +1,50 @@
+{
+  "uid": "cf-pipelines",
+  "title": "CloudForge Pipelines",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Pipeline events / second",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cloudforge"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (action) (rate(cloudforge_operations_total{action=~\"PIPELINE_.*\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Active worker assignments",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cloudforge"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "cloudforge_worker_active_assignments"
+        }
+      ]
+    }
+  ]
+}

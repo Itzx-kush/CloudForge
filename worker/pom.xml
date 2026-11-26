@@ -14,7 +14,7 @@
         <java.version>17</java.version>
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <jackson.version>2.18.3</jackson.version>
+        <jackson.version>2.18.12</jackson.version>
         <logback.version>1.5.18</logback.version>
         <kubernetes-client.version>21.0.2</kubernetes-client.version>
         <junit.version>5.11.4</junit.version>

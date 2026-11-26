@@ -113,6 +113,7 @@ function createAuthenticatedFetchMock(overrides?: {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const method = (init?.method ?? 'GET').toUpperCase();
 
+    if (url.endsWith('/security/assessments')) return jsonResponse([]);
     if (url.startsWith('/api/health')) {
       if (typeof overrides?.health === 'function') {
         return overrides.health();

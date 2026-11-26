@@ -110,7 +110,6 @@ jobs:
         run: mvn -B package -DskipTests
 
       - name: Verify rollback and read-only recovery in disposable Kubernetes
-        if: github.head_ref == 'feat/phase3-7-release-history-rollback' || github.ref_name == 'feat/phase3-7-release-history-rollback'
         shell: bash
         run: |
           set -euo pipefail
@@ -135,3 +134,63 @@ jobs:
           export CLOUDFORGE_K8S_E2E_SECOND_IMAGE_REF=ghcr.io/mccutchen/go-httpbin@sha256:2b02b8844eab42d432d9c4bbd96a20d7ff348292097eeee4546e79252f72c70e
           export CLOUDFORGE_K8S_E2E_PROBE_PATH=/status/200
           mvn -B -Dtest=RealLocalKubernetesEndToEndTest test
+
+  phase4:
+    name: Monitoring and supply-chain verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
+        with:
+          version: v0.69.3
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+        with:
+          cosign-release: v2.5.3
+      - name: Validate monitoring configuration
+        run: |
+          docker run --rm -v "$PWD/infrastructure/monitoring/prometheus:/etc/prometheus:ro" -v /dev/null:/run/secrets/metrics_token:ro --entrypoint promtool prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/infrastructure/monitoring/alertmanager:/etc/alertmanager:ro" --entrypoint amtool prom/alertmanager:v0.28.1 check-config /etc/alertmanager/alertmanager.yml
+          jq -e '.panels | length > 0' infrastructure/monitoring/grafana/dashboards/*.json
+      - name: Build frontend image and verify deep links
+        run: |
+          docker build -t cloudforge-frontend:ci frontend
+          docker run -d --name frontend --read-only --tmpfs /tmp --cap-drop ALL -p 127.0.0.1:8090:8080 cloudforge-frontend:ci
+          curl --retry 10 --retry-all-errors --retry-delay 1 -fsS http://localhost:8090/monitoring -o "$RUNNER_TEMP/frontend.html" || { docker logs frontend; exit 1; }
+          grep -q 'id="root"' "$RUNNER_TEMP/frontend.html"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/api/auth/me)" = 404
+          docker save -o "$RUNNER_TEMP/frontend.tar" cloudforge-frontend:ci
+      - name: Verify SBOM integrity with disposable signing identity
+        env:
+          COSIGN_PASSWORD: ""
+        run: |
+          cd "$RUNNER_TEMP"
+          trivy image --input frontend.tar --format cyclonedx --output sbom.json
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' sbom.json
+          cosign generate-key-pair
+          cosign sign-blob --yes --key cosign.key --tlog-upload=false --output-signature sbom.sig sbom.json
+          cosign verify-blob --key cosign.pub --insecure-ignore-tlog --signature sbom.sig sbom.json
+          echo ' ' >> sbom.json
+          if cosign verify-blob --key cosign.pub --insecure-ignore-tlog --signature sbom.sig sbom.json; then exit 1; fi
+      - name: Scan source dependencies and secrets, then scan frontend image
+        run: |
+          set -euo pipefail
+          rejected=0
+          for target in source image; do
+            report="$RUNNER_TEMP/$target-scan.json"
+            if [[ "$target" == source ]]; then
+              trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --format json --output "$report" .
+            else
+              trivy image --input "$RUNNER_TEMP/frontend.tar" --scanners vuln,secret --severity HIGH,CRITICAL --format json --output "$report"
+            fi
+            count=$(jq '[.Results[]? | (.Vulnerabilities[]?, .Secrets[]?)] | length' "$report")
+            echo "$target high or critical findings: $count" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$count" != 0 ]]; then
+              jq -r '.Results[]? | .Target as $path | (.Vulnerabilities[]? | [$path,.PkgName,.InstalledVersion,.VulnerabilityID,.FixedVersion]), (.Secrets[]? | [$path,.RuleID]) | @tsv' "$report" | sort -u
+              echo "::error::Security policy rejected $target"
+              rejected=1
+            fi
+          done
+          test "$rejected" = 0

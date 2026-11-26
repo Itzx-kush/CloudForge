@@ -55,6 +55,7 @@ public class WorkerAgentLoop implements AutoCloseable {
     private final KubernetesDeploymentExecutor kubernetesDeploymentExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Map<UUID, ActiveExecutionContext> activeExecutions = new ConcurrentHashMap<>();
+    private final WorkerTelemetry telemetry = new WorkerTelemetry(System.getenv("CLOUDFORGE_WORKER_METRICS_DIR"));
     private ScheduledExecutorService heartbeatScheduler;
 
     public WorkerAgentLoop(
@@ -169,7 +170,12 @@ public class WorkerAgentLoop implements AutoCloseable {
         if (leaseOpt.isEmpty()) {
             return false;
         }
-        executeClaimedLease(leaseOpt.get());
+        long started = System.nanoTime();
+        try {
+            executeClaimedLease(leaseOpt.get());
+        } finally {
+            telemetry.completed(System.nanoTime() - started);
+        }
         return true;
     }
 
@@ -263,8 +269,10 @@ public class WorkerAgentLoop implements AutoCloseable {
                     }
                 }
             }
+            telemetry.heartbeat(true, activeExecutions.size());
         } catch (Exception ex) {
-            log.warn("Worker heartbeat failed: {}", ex.getMessage());
+            telemetry.heartbeat(false, activeExecutions.size());
+            log.warn("Worker heartbeat failed");
         }
     }
 
