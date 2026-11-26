@@ -158,7 +158,8 @@ jobs:
         run: |
           docker build -t cloudforge-frontend:ci frontend
           docker run -d --name frontend --read-only --tmpfs /tmp --cap-drop ALL -p 127.0.0.1:8090:8080 cloudforge-frontend:ci
-          curl --retry 10 --retry-connrefused -fsS http://localhost:8090/monitoring | grep -q 'id="root"'
+          curl --retry 10 --retry-all-errors --retry-delay 1 -fsS http://localhost:8090/monitoring -o "$RUNNER_TEMP/frontend.html" || { docker logs frontend; exit 1; }
+          grep -q 'id="root"' "$RUNNER_TEMP/frontend.html"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/api/auth/me)" = 404
           docker save -o "$RUNNER_TEMP/frontend.tar" cloudforge-frontend:ci
       - name: Verify SBOM integrity with disposable signing identity
