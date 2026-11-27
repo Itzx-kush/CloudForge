@@ -44,9 +44,21 @@ public class ArtifactEvidenceService {
         this.artifacts = artifacts;
         this.access = access;
         this.audit = audit;
-        key = publicKey.isBlank() ? null : KeyFactory.getInstance("EC")
-                .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(publicKey)));
+        key = publicKey.isBlank() ? null : parsePublicKey(publicKey);
         fingerprint = key == null ? "" : digest(key.getEncoded());
+    }
+
+    private static PublicKey parsePublicKey(String rawKey) throws GeneralSecurityException {
+        String normalized = rawKey
+                .replace("\\n", "\n")
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s+", "");
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        return KeyFactory.getInstance("EC")
+                .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(normalized)));
     }
 
     @Transactional
@@ -58,11 +70,11 @@ public class ArtifactEvidenceService {
         Assessment report;
         byte[] bytes;
         try {
-            bytes = Base64.getDecoder().decode(envelope.payload());
+            bytes = Base64.getDecoder().decode(envelope.payload().trim());
             var verifier = Signature.getInstance("SHA256withECDSA");
             verifier.initVerify(key);
             verifier.update(bytes);
-            if (!verifier.verify(Base64.getDecoder().decode(envelope.signature()))) {
+            if (!verifier.verify(Base64.getDecoder().decode(envelope.signature().trim()))) {
                 throw new SignatureException();
             }
             report = mapper.readValue(bytes, Assessment.class);

@@ -151,7 +151,7 @@ export function Sidebar({
               />
             </div>
             <p className="cf-sidebar__status-meta mono">
-              Phase 2 · Persistent Workspace
+              CloudForge v1.0 · Control Plane
             </p>
           </div>
         </div>

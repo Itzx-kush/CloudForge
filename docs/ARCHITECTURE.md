@@ -1,146 +1,122 @@
 # CloudForge Architecture
 
-This document describes the **implemented Phase 1, Phase 2 & Phases 3.1–3.6 architecture** alongside the **planned target architecture** for Phases 3.7–4. Every section explicitly distinguishes what is live today from what is planned.
+This document describes the **complete implemented Phases 1–4 architecture** of CloudForge (`v1.0.0`), explicitly distinguishing between the **web control plane** (always active, including Render staging), **opt-in isolated execution planes** (local / approved environments), and **optional observability and supply-chain verification infrastructure**.
 
 ---
 
 ## 1. Architectural Principles
 
-1. **Clear Separation of Concerns:** The React control-plane UI, Java 17 Spring Boot API, PostgreSQL 17 data layer, and GitHub integration layer communicate through explicit HTTP/JSON, OAuth 2.0, GitHub App JWT, and JDBC contracts.
-2. **Identity vs. Repository Authorization Separation:** GitHub OAuth 2.0 handles user identity (`read:user`, `user:email`), whereas a dedicated GitHub App handles least-privilege repository discovery (`metadata: read`) and read-only GitHub Actions telemetry (`actions: read`) via short-lived scoped installation tokens and HMAC-SHA256 verified webhooks.
-3. **Defense-in-Depth & Backend-Enforced Authorization:** Every workspace-scoped API verifies server-side session authentication, CSRF tokens (for mutations), workspace membership, and RBAC roles (`OWNER`, `DEVELOPER`, `VIEWER`) on the backend — never relying on frontend visibility alone.
-4. **No Arbitrary Repository Execution or Plaintext Secrets:** CloudForge persists non-secret environment configuration and declarative orchestration DAG metadata only; it never executes arbitrary shell commands, repository scripts, Docker builds, or Kubernetes jobs inside the control-plane backend.
-5. **Versioned, Non-Destructive Persistence:** Flyway manages all PostgreSQL schema evolution (`ddl-auto: none` in runtime, `validate` in test profile), preserving the existing Docker volume cleanly.
+1. **Control-Plane / Execution-Plane Separation:** The Spring Boot control-plane backend (`backend/`) manages authentication, workspace RBAC, metadata, orchestration DAG state, encrypted secrets, release history, and audit trails. It **never** mounts `/var/run/docker.sock`, runs BuildKit, installs `kubectl`, reads kubeconfigs, or executes arbitrary repository code. All container builds, source downloads, and Kubernetes API calls run exclusively in the standalone worker agent (`worker/target/cloudforge-worker.jar`).
+2. **Identity vs. Repository Authorization Separation:** GitHub OAuth 2.0 handles user identity (`read:user`, `user:email`), while a dedicated GitHub App handles least-privilege repository discovery (`metadata: read`), read-only GitHub Actions telemetry (`actions: read`), and optional operator-allowlisted source archives (`contents: read` when Phase 3.5 source acquisition is enabled) via short-lived scoped tokens and HMAC-SHA256 verified webhooks.
+3. **Fail-Closed Defaults & Render Safety:** All privileged subsystems (`workers`, `source`, `secrets.worker-delivery`, `oci`, `kubernetes`, `management.tracing`) default to `false` and are explicitly locked `false` in `application-render.yml`.
+4. **Immutable Artifacts & Verified Rollouts/Rollbacks:** Container deployments require verified immutable `@sha256:` OCI digests (never mutable tags), deterministic SHA-256 manifest checksum verification across backend and worker, Server-Side Apply (`force=false`), ownership-label overwrite protection, and live rollout readiness verification before recording `SUCCEEDED`.
+5. **Versioned, Non-Destructive Persistence:** Flyway manages all PostgreSQL 17 schema evolution across `V1`–`V11` (37 application tables) with `ddl-auto: none` in runtime and `validate` in test verification.
 
 ---
 
-## 2. Phases 1–3.5 Implemented Architecture
-
-### 2.1 High-Level Component Diagram
-
-```mermaid
-flowchart LR
-    User["Developer Browser"] -->|"HTTP :5173 (Same-Origin Cookies + CSRF)"| Vite["React 19 + TypeScript + Vite"]
-    Vite -->|"Proxy /api, /oauth2, /login/oauth2, /actuator"| Backend["Spring Boot 3.4 API (Java 17) :8080"]
-    Backend -->|"Flyway + JPA + JDBC via cloudforge-net"| Postgres[("PostgreSQL 17 :5432")]
-    Postgres --- Volume[("Named Volume: cloudforge_postgres_data")]
-    Backend <-->|"OAuth 2.0 Auth Code (read:user, user:email)"| GHOAuth["GitHub OAuth"]
-    Backend <-->|"RS256 App JWT -> Short-Lived Installation Tokens"| GHApp["GitHub App REST API"]
-    GHApp -->|"POST /api/webhooks/github (HMAC-SHA256)"| Backend
-```
-
-### 2.2 Authentication, Session & CSRF Flow
-
-1. Unauthenticated visits to any protected React route redirect to `/login`.
-2. Clicking **Continue with GitHub** initiates Spring Security's standard OAuth 2.0 authorization-code flow at `/oauth2/authorization/github` with server-side `state` stored in the HTTP session (`CLOUDFORGE_SESSION`, `HttpOnly=true`, `SameSite=Lax`, configurable `Secure`).
-3. On callback (`/login/oauth2/code/github`), `CloudForgeOAuth2UserService` exchanges the code server-side, upserts the user in `users`, automatically provisions a personal workspace with `OWNER` membership on first login, records a `USER_REGISTERED` / `USER_LOGIN` audit event, and stores a token-free `CloudForgeUserPrincipal` in the server-side session.
-4. `OAuth2LoginSuccessHandler` validates redirect destinations strictly against `cloudforge.auth.allowed-redirect-origins` before redirecting back to the SPA.
-5. All mutating browser requests (`POST`, `PUT`, `PATCH`, `DELETE`) require the `X-XSRF-TOKEN` header validated against the `XSRF-TOKEN` cookie (`SpaCsrfTokenRequestHandler` + `CsrfCookieFilter`).
-6. `POST /api/auth/logout` logs `USER_LOGOUT`, invalidates the server-side `HttpSession`, clears `SecurityContext`, and expires session/CSRF cookies.
-7. `GET /api/health` and `GET /actuator/health` remain publicly accessible without exposing credentials or internal details.
-
-### 2.3 GitHub App, Actions Integration & Webhook Architecture
-
-- **`GitHubAppTokenService`:** Loads the RSA private key (PKCS#1 or PKCS#8 PEM via BouncyCastle), signs RS256 App JWTs (9-minute lifetime, 60-second clock-drift buffer) via Nimbus JOSE+JWT, and caches short-lived installation access tokens strictly in memory keyed by `(installationId, GitHubTokenScope)` with automatic refresh/eviction across scopes.
-- **`GitHubIntegrationService`:**
-  - `POST /api/workspaces/{workspaceId}/github/install-url` (`OWNER` only) stores a single-use 32-byte CSPRNG `state` bound to `(workspaceId, userId)` in the HTTP session and returns the GitHub App install URL.
-  - `GET /api/github/app/callback` consumes the single-use `state`, verifies `OWNER` authorization and installation ownership (enforcing strict personal account ID matching and failing closed on unverified new Organization installations until user-to-server `/user/installations` verification is added), persists `github_installations`, and synchronizes authorized repositories into `linked_repositories`.
-  - Handles revoked (`404`), suspended (`403`), and rate-limited (`429` / `X-RateLimit-Remaining: 0`) GitHub responses cleanly.
-- **`GitHubActionsSyncService` & `PipelineService` (Phase 3.1 Read-Only):**
-  - Pull-synchronizes GitHub Actions workflows and recent runs using `ACTIONS_READ` scoped tokens (`metadata: read`, `actions: read`) outside open database transactions, persists records idempotently into `github_workflows` and `github_workflow_runs`, protects against overlapping per-repository syncs, and fetches live ordered job/step breakdowns on demand (`GET /api/workspaces/{workspaceId}/workflow-runs/{runId}/jobs`).
-  - See `docs/PHASE3_1_GITHUB_ACTIONS.md` for full endpoint, RBAC, and error-handling specifications.
-- **`GitHubWebhookController` & `GitHubWebhookService` (`POST /api/webhooks/github`):**
-  - Reads exact raw payload bytes (`byte[]`) and verifies `X-Hub-Signature-256` with HMAC-SHA256 and `MessageDigest.isEqual` (constant-time).
-  - Atomically claims `X-GitHub-Delivery` via `INSERT ... ON CONFLICT DO NOTHING` in `webhook_deliveries` prior to executing side effects so concurrent duplicate deliveries cannot duplicate state changes or abort PostgreSQL transactions.
-  - Handles `ping`, `installation`, `installation_repositories`, and `repository` lifecycle events; safely ignores unsupported events (such as `push`) with `202 Accepted` without triggering builds or deployments.
-
-### 2.4 Pipeline Orchestration Subsystem (Phase 3.2 — `com.cloudforge.backend.orchestration`)
-
-- **`orchestration.engine`:** Pure, deterministic orchestration core containing `PipelineStateMachine`, `StageStateMachine`, `StageDagValidator` (Kahn topological sorting, cycle/missing/duplicate/command/secret validation), `StageDependencyEvaluator` (downstream readiness & failure propagation), and `WorkerAssignmentContract` (explicit internal contract for future Phase 3.3 workers).
-- **`orchestration.entity` & `orchestration.repository`:** Six PostgreSQL-backed entities (`PipelineDefinitionEntity`, `PipelineStageDefinitionEntity`, `PipelineRunEntity`, `PipelineStageRunEntity`, `PipelineRunEventEntity`, `PipelineIdempotencyKeyEntity`) with encapsulated status transitions (no public `setStatus`), optimistic `@Version` row locking, pessimistic `FOR UPDATE` locking, and typed Criteria search queries.
-- **`orchestration.service` & `orchestration.controller`:** `PipelineDefinitionService`, `PipelineIdempotencyService`, `PipelineOrchestrationService`, and `PipelineOrchestrationController` exposing 9 workspace-isolated RBAC REST endpoints under `/api/workspaces/{workspaceId}/pipelines`. Queued runs persist immutable definition snapshots, promote root stages to `READY`, record immutable `pipeline_run_events` and workspace `audit_events`, and remain `QUEUED` (`Queued — Awaiting execution infrastructure`) until Phase 3.3 isolated workers exist. See `docs/PHASE3_2_PIPELINE_ORCHESTRATION.md`.
-
-### 2.5 Isolated Worker Execution Plane (Phase 3.3 — `com.cloudforge.backend.worker` & `worker/`)
-
-CloudForge enforces strict separation between the **Control Plane** (`backend/`) and the **Execution Plane** (`worker/`):
-
-- **Control Plane (`com.cloudforge.backend.worker`):** Manages trusted worker registration (`WorkerRegistryService`), constant-time SHA-256 worker credential authentication (`WorkerCredentialService` + stateless `@Order(1)` `WorkerAuthenticationFilter` on `/api/internal/workers/**`), bounded FIFO `READY`-stage scheduling & atomic fenced leasing (`WorkerSchedulerService`), outcome validation & DAG progression (`WorkerResultProcessorService`), expired lease fencing & crash recovery (`WorkerRecoveryService`), and defense-in-depth sanitized bounded log storage (`WorkerExecutionLogService` + `LogSanitizer`). Never executes Docker commands or mounts `/var/run/docker.sock`; disabled by default (`cloudforge.workers.enabled=false`) and locked off in `application-render.yml`.
-- **Execution Plane (`worker/` — standalone `cloudforge-worker.jar`):** Runs as a separate host-side development process (`CloudForgeWorkerApplication` -> `WorkerAgentLoop` -> `HttpControlPlaneClient` -> `DockerIsolatedExecutionAdapter`). Executes ONLY compile-time allowlisted operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`) inside ephemeral, hardened Docker containers (`--rm`, `--user 65534:65534`, `--cap-drop=ALL`, `no-new-privileges:true`, `--read-only`, bounded `noexec` `/tmp`, `--network=none`, CPU/memory/PID limits, pinned/allowlisted images only). See `docs/PHASE3_3_ISOLATED_WORKERS.md`.
-
-### 2.6 Encrypted Secret Management & Key Management (Phase 3.4 — `com.cloudforge.backend.secrets`)
-
-- **Cryptographic Envelope & External Key Providers (`secrets.crypto`):** `SecretCryptoService` encrypts each secret version with a freshly generated 256-bit DEK (`AES-256-GCM`, 96-bit CSPRNG nonce, 128-bit auth tag, deterministic AAD over workspace, project, environment, secret ID, version, and format version). `SecretKeyProvider` (`EnvKeyringSecretKeyProvider` in Phase 3.4) wraps DEKs under externally supplied versioned 256-bit master KEKs with zero plaintext keys in PostgreSQL and fail-closed startup/runtime validation.
-- **Lifecycle, Pipeline Pinning & Lease-Bound Worker Delivery (`secrets.service`, `secrets.controller`):** `SecretManagementService` & `EnvironmentSecretController` provide `OWNER`-restricted, write-only CRUD (`POST /secrets`, `/rotate`, `/revoke`, `DELETE`) with `Cache-Control: no-store`. `PipelineDefinitionService` and `PipelineOrchestrationService` validate per-stage secret references on approved worker stages (`SOURCE_PREP` / `TEST` allowlisted ops) within a single project target environment and pin immutable secret versions on queue without decrypting. `SecretDeliveryService` gates internal worker secret fetches on active lease, lease token, fencing generation, HTTPS/loopback opt-in, revocation status, and bounded replay limits (`workerDeliveryEnabled=false` by default). `SecretKeyRotationService` & `OperatorSecretKeyController` support operator-only DEK-only batch rewrapping across master key rotations, while `LogSanitizer`, `AttemptSecretRedactionService`, and `worker/`'s `WorkerSecretRedactor` strip leaked encoded/multiline/boundary-spanning secrets. See `docs/PHASE3_4_SECRET_MANAGEMENT.md`.
-
-### 2.7 Backend Package Structure (`com.cloudforge.backend`)
-
-| Package | Responsibility |
-| --- | --- |
-| `controller` | REST APIs (`HealthController`, `AuthController`, `WorkspaceController`, `ProjectController`, `GitHubIntegrationController`, `PipelineController`, `GitHubWebhookController`, `AuditEventController`, `SpaPageController`). |
-| `service` | Domain logic (`HealthService`, `UserAccountService`, `WorkspaceAuthorizationService`, `WorkspaceService`, `ProjectService`, `ProjectEnvironmentService`, `GitHubIntegrationService`, `GitHubActionsSyncService`, `PipelineService`, `GitHubWebhookService`, `AuditService`, `AuditQueryService`). |
-| `orchestration` | Phase 3.2 modular pipeline orchestration subsystem (`controller`, `service`, `engine`, `entity`, `repository`, `dto`) managing persistent pipeline definitions, DAG validation, state machines, idempotency, concurrency control, cancellation, and `WorkerAssignmentContract`. |
-| `worker` | Phase 3.3 control-plane worker subsystem (`config`, `security`, `entity`, `repository`, `dto`, `service`, `controller`) handling trusted worker auth, registry, heartbeats, bounded scheduling, atomic fenced leasing, result processing, crash/lease recovery, and sanitized log persistence. |
-| `secrets` | Phase 3.4 encrypted secret management (`config`, `crypto`, `entity`, `repository`, `dto`, `security`, `service`, `controller`) providing AES-256-GCM envelope encryption, `EnvKeyringSecretKeyProvider`, write-only CRUD, operator DEK rewrapping, lease-bound worker delivery, cooldown-protected audit, and defense-in-depth redaction. |
-| `source` | Phase 3.5A immutable GitHub source acquisition coordination (`ProjectSourceService`, `WorkerSourceController`) pinning commits and issuing single-use HTTPS archive URLs to allowlisted `GITHUB_SOURCE` workers. |
-| `oci` | Phase 3.5B secure container builds, OCI registry connections, ephemeral verified handoffs, BuildKit lifecycle coordination, encrypted registry credential resolution, immutable digest verification, and artifact query APIs (`config`, `entity`, `repository`, `dto`, `service`, `controller`). |
-| `k8s` | Phase 3.6 secure Kubernetes deployment control-plane subsystem (`config`, `entity`, `repository`, `dto`, `service`, `controller`) handling SSRF/TLS-validated cluster connections, operator-approved namespace bindings, declarative Deployment + ClusterIP Service validation, deterministic SHA-256 manifest generation, encrypted ServiceAccount token resolution, production approval gating, deployment lifecycle/reconciliation state, and workspace/worker REST APIs (zero Kubernetes client or `kubectl` inside `backend/`). |
-| `github` | GitHub App integration boundary (`GitHubAppTokenService`, `GitHubTokenScope`, `GitHubApiClient`, `RestClientGitHubApiClient`, `WebhookSignatureVerifier`, typed metadata DTOs & integration exceptions). |
-| `security` | Spring Security filter chain, OAuth 2.0 user service, success/failure handlers, `CloudForgeUserPrincipal`, `RedirectOriginValidator`, SPA CSRF handler/filter, JSON 401/403 handlers. |
-| `entity` | `BaseAuditableEntity` (UUID PK + UTC timestamps) and 11 core domain JPA entities + enums (including `GitHubWorkflowEntity`, `GitHubWorkflowRunEntity`, `WorkflowRunNormalizedStatus`). |
-| `repository` | `DatabaseProbeRepository` + 11 core Spring Data JPA repositories with workspace-scoped `JOIN FETCH` and typed Criteria queries. |
-| `dto` | Immutable Java 17 request/response records with Bean Validation constraints. |
-| `config` | `AppProperties` (CORS, Auth, GitHub App), `WebConfig`, `RequestCorrelationFilter`. |
-| `exception` | `GlobalExceptionHandler` + typed domain/integration exceptions returning structured `ApiErrorResponse` (including `409 Conflict` for optimistic locking failures). |
-
-### 2.6 Database Schema (Flyway Migrations)
-
-Located under `backend/src/main/resources/db/migration/`:
-- **`V1__phase2_core_schema.sql`:** `users`, `workspaces`, `workspace_members`, `github_installations`, `linked_repositories`, `projects`, `project_environments`, `audit_events` with UUID primary keys, foreign keys, role/status check constraints, unique constraints, and query indexes.
-- **`V2__webhook_deliveries.sql`:** `webhook_deliveries` for idempotent webhook processing and SHA-256 payload fingerprinting without storing sensitive payload bodies.
-- **`V3__github_actions_workflows.sql`:** `github_workflows` and `github_workflow_runs` storing non-sensitive GitHub Actions workflow definitions and execution attempts keyed by `(linked_repository_id, github_run_id, run_attempt)`.
-- **`V4__pipeline_orchestration_engine.sql`:** `pipeline_definitions`, `pipeline_stage_definitions`, `pipeline_runs`, `pipeline_stage_runs`, `pipeline_run_events`, and `pipeline_idempotency_keys` storing workspace-scoped pipeline definitions, immutable run snapshots, DAG stage instances, chronological transition events, and restart-safe idempotency claims.
-- **`V5__isolated_worker_execution.sql`:** Extends `pipeline_runs` / `pipeline_stage_runs` with cancellation-intent, allowlisted operation, retry backoff, and fencing columns, and adds `worker_nodes`, `worker_credentials` (SHA-256 hashes only), `stage_execution_attempts`, and `stage_execution_logs`.
-- **`V6__encrypted_secret_management.sql`:** Extends pipeline definitions, stages, runs, and attempts with target-environment and secret-binding metadata, and creates `environment_secrets`, `environment_secret_versions`, `pipeline_run_secret_references`, and `secret_key_rotation_runs`.
-- **`V7__container_builds_oci_registry.sql`:** Extends `worker_nodes` with `GITHUB_SOURCE` adapter capability and adds `source_archive_issued_at` on `stage_execution_attempts`.
-- **`V8__oci_builds_and_registry_artifacts.sql`:** Extends `worker_nodes` (`OCI_BUILDKIT`) and `stage_execution_attempts` (6 OCI failure categories) and adds `oci_registry_connections`, `oci_source_handoffs`, `oci_build_records`, `oci_image_artifacts`, `oci_publish_attempts`, and `oci_artifact_events` (31 application tables total).
-- **`V9__kubernetes_deployment_engine.sql`:** Extends `worker_nodes` (`KUBERNETES_DEPLOY`) and `stage_execution_attempts` (13 Kubernetes failure categories) and adds `kubernetes_cluster_connections`, `kubernetes_namespace_bindings`, `kubernetes_deployment_configs`, `kubernetes_deployment_operations`, and `kubernetes_deployment_events` (36 application tables total).
-
-### 2.8 Frontend Architecture (`frontend/`)
-
-- **Framework:** React 19, TypeScript (strict mode), Vite, React Router 7, Obsidian-inspired theme & appearance system (`PreferenceProvider` supporting Dark/Light/System themes, 5 accent palettes, density, and reduced-motion).
-- **State & Auth:** `AuthContext` manages session verification (`/api/auth/me`, `/api/auth/config`), active workspace selection, role awareness, and CSRF-protected logout; `ProtectedRoute` guards authenticated views cleanly.
-- **API Client (`src/services/api.ts`):** Uses `credentials: 'include'`, automatic `X-XSRF-TOKEN` header propagation on mutations, custom per-request headers (such as `Idempotency-Key`), structured `ApiClientError` handling (including `Retry-After` rate-limit parsing), and preserved Phase 1 live `/api/health` probing.
-- **Live Pages:** `LoginPage`, `DashboardPage` (real project/repo counts + live health), `ProjectsPage` + `ProjectDetailPage` (CRUD + persistent non-secret environments + **Phase 3.4 write-only `EnvironmentSecretsPanel`**), `RepositoriesPage` (GitHub App installations, sync, search/filter, link to project), **`PipelinesPage`** (tab-separated Phase 3.1 live GitHub Actions workflows/runs/jobs + Phase 3.2–3.6 `CloudForgePipelinesPanel` supporting `KUBERNETES_DEPLOY` on `DEPLOYMENT` stages + Phase 3.5B `OciArtifactsPanel`), **`DeploymentsPage` (Phase 3.6 Kubernetes Deployment Console: overview telemetry, cluster registration & validation, approved namespace bindings, immutable digest deployment creation with production approval gate, live status refresh, Pod Diagnostics, lifecycle event timeline, and confirmation-gated cancellation)**, `SettingsPage` (profile, workspace/member RBAC, appearance, runtime status, owner audit trail), `MonitoringPage` (live `/api/health` inspector).
-
----
-
-## 3. Phase 3.5 & Phase 3.6 Delivery Plane (Implemented — Trusted Local / Approved Cluster Mode)
-
-- **Phase 3.5 (Immutable OCI Builds & Publishing):** Splits container production across isolated, lease-fenced `GITHUB_SOURCE` and `OCI_BUILDKIT` workers, independently verifying pushed manifest SHA-256 digests and persisting immutable `oci_image_artifacts`. See [`docs/PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md`](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md).
-- **Phase 3.6 (Secure Kubernetes Deployment Engine):** Extends the existing Phase 3.2/3.3 orchestration and worker scheduler with a dedicated `KUBERNETES_DEPLOY` worker mode backed by `io.kubernetes:client-java` (strict HTTPS, explicit X.509 CA PEM trust, SSRF-safe DNS, `followRedirects(false)`, Server-Side Apply `force=false`, ownership-label guard). The control plane validates declarative `Deployment` + `ClusterIP Service` configs against verified Phase 3.5 `@sha256:` artifacts, resolves least-privilege ServiceAccount tokens strictly from Phase 3.4 AES-256-GCM encrypted secrets, enforces explicit `OWNER` production approval gates, observes real rollout readiness & pod diagnostics, and records `RECONCILIATION_REQUIRED` for post-apply cancellations or worker crashes when external state is uncertain. See [`docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`](PHASE3_6_KUBERNETES_DEPLOYMENT.md).
-
-## 4. Planned Target Architecture (Phases 3.7–4)
-
-> **Status:** Deferred beyond Phase 3.6 (rollback automation, microVM multi-tenant build sandboxing, Prometheus/Grafana observability, and DevSecOps policy gates). Documented to guide incremental delivery.
+## 2. High-Level System Architecture
 
 ```mermaid
 flowchart TB
-    UI["React Control Plane"] --> API["Spring Boot Control Plane API"]
-    API --> PG[("PostgreSQL 17 (Workspaces, Projects, Releases, Audit)")]
-    API <--> GH["GitHub OAuth / GitHub App + Actions"]
-    API --> Secrets["Encrypted Secrets Vault / KMS (Phase 3)"]
-    API --> Queue["Build Job Queue"]
-    Queue --> Worker["Isolated Rootless Build Worker (CPU/RAM/Net Limits)"]
-    Worker --> Scan["DevSecOps Gate (Trivy, SBOM, Secret Scan)"]
-    Scan --> Reg["OCI Container Registry"]
-    API --> K8s["Kubernetes Controller (Namespaces, Rollouts, Rollback)"]
-    K8s --> Reg
-    Prom["Prometheus"] --> API
-    Prom --> K8s
-    Graf["Grafana Dashboards & Alerts"] --> Prom
+    Browser["Developer Browser (React 19 + TypeScript SPA)"]
+    Browser -->|"HTTPS Same-Origin (Render) or Vite Proxy / Nginx"| API["Spring Boot 3.5 Control Plane API (Java 17)"]
+    API -->|"Flyway V1-V11 + JPA/JDBC"| PG[("PostgreSQL 17 (37 Tables)")]
+    API <-->|"OAuth 2.0 (read:user, user:email)"| GHOAuth["GitHub OAuth"]
+    API <-->|"RS256 App JWT -> Scoped Tokens"| GHApp["GitHub App REST API"]
+    GHApp -->|"POST /api/webhooks/github (HMAC-SHA256)"| API
+
+    subgraph ExecutionPlane["Opt-In Isolated Execution Plane (Disabled on Render)"]
+        W1["DOCKER_ISOLATED Worker (Allowlisted Ops)"]
+        W2["GITHUB_SOURCE Worker (Pinned Archive)"]
+        W3["OCI_BUILDKIT Worker (Build + Publish)"]
+        W4["KUBERNETES_DEPLOY Worker (Rollout / Rollback / Reconcile)"]
+    end
+
+    W1 & W2 & W3 & W4 <-->|"Stateless Bearer Auth + Lease Fencing (/api/internal/workers/**)"| API
+    W3 -->|"OCI Distribution v1.1 + Digest Re-Verification"| Reg["OCI Container Registry"]
+    W4 -->|"HTTPS + CA Pinning + Least-Privilege SA Token"| K8s["Approved Kubernetes Namespace"]
+
+    subgraph DevSecOps["Phase 4 Supply-Chain & Observability (Opt-In)"]
+        Op["Operator Station (Trivy + CycloneDX SBOM + Cosign)"]
+        Prom["Prometheus v3.5"]
+        AM["Alertmanager v0.28"]
+        Graf["Grafana 12.1 (5 Dashboards)"]
+        OTel["OpenTelemetry Collector"]
+    end
+
+    Op -->|"Signed ECDSA Evidence (POST .../security/artifacts/{id}/assessments)"| API
+    Prom -->|"GET /actuator/prometheus (Bearer Token)"| API
+    Prom -->|"postgres-exporter / worker-exporter"| PG
+    Prom --> AM
+    Graf --> Prom
+    API -.->|"Optional OTLP HTTP (:4318)"| OTel
 ```
 
+---
 
-### Release revisions and recovery
+## 3. Core Subsystems
 
-Phase 3.7 extends the Kubernetes operation ledger with target revisions and explicit rollback and reconciliation operations. Release requests share target locking with direct and pipeline deployments. Rollback restores a validated snapshot through the existing worker, and read-only worker observations capture evidence after uncertain writes. See [Phase 3.7 release history and rollback](PHASE3_7_RELEASE_HISTORY_ROLLBACK.md).
+### 3.1 Authentication, Session & CSRF Security (`security/`)
+- **HTTP-only Server-Side Sessions:** Spring Security GitHub OAuth 2.0 login (`read:user`, `user:email`) creates `CLOUDFORGE_SESSION` (`HttpOnly=true`, `SameSite=Lax`, `Secure=true` in Render/HTTPS) storing a token-free `CloudForgeUserPrincipal`. GitHub access tokens never reach browser JavaScript or logs.
+- **SPA CSRF Protection:** Mutating browser requests (`POST`, `PUT`, `PATCH`, `DELETE`) require `X-XSRF-TOKEN` matching the `XSRF-TOKEN` cookie (`SpaCsrfTokenRequestHandler` + `CsrfCookieFilter`).
+- **Open-Redirect Protection:** `OAuth2LoginSuccessHandler` and `OAuthConfigGuardFilter` validate redirect origins strictly against `cloudforge.auth.allowed-redirect-origins`.
+- **Filter Chain Isolation:** Four ordered `SecurityFilterChain` beans separate concerns cleanly:
+  - `@Order(0)` `ScrapeSecurity`: `/actuator/prometheus/**` (stateless, `GET`-only, `>= 32`-char constant-time Bearer token).
+  - `@Order(1)` `workerInternalSecurityFilterChain`: `/api/internal/workers/**` (stateless per-worker `X-CloudForge-Worker-Id` + SHA-256 Bearer token, fail-closed `503` when workers disabled).
+  - `@Order(2)` `operatorSecretSecurityFilterChain`: `/api/internal/operator/secrets/**` (stateless operator key-rotation token, fail-closed when disabled).
+  - `@Order(3)` `securityFilterChain`: Browser OAuth/session, SPA shell routes, public health probes (`/api/health`, `/actuator/health`, `/actuator/info`), and HMAC-verified `/api/webhooks/github`.
+
+### 3.2 Workspace RBAC, GitHub App & Actions (`service/`, `github/`)
+- **RBAC:** Backend-enforced `OWNER`, `DEVELOPER`, and `VIEWER` roles with strict cross-workspace isolation and last-owner protection.
+- **GitHub App:** RS256 App JWT signing (`GitHubAppTokenService`), in-memory scoped installation tokens (`METADATA_READ`, `ACTIONS_READ`, `CONTENTS_READ`), single-use CSPRNG installation state validation, fail-closed new Organization installation guard, and atomic `INSERT ... ON CONFLICT DO NOTHING` webhook deduplication (`webhook_deliveries`).
+- **GitHub Actions Sync (Phase 3.1):** Short-transaction pull synchronization (`GitHubActionsSyncService`) persisting `github_workflows` and `github_workflow_runs` with live job/step inspection on demand.
+
+### 3.3 Pipeline Orchestration & Worker Execution (`orchestration/`, `worker/`, `worker/`)
+- **Orchestration Engine (Phase 3.2):** Declarative DAG validation (`StageDagValidator` via Kahn topological sort rejecting cycles, shell commands, and plaintext secrets), explicit run/stage state machines, immutable definition snapshots, database-backed `Idempotency-Key` claims, and race-safe cancellation.
+- **Isolated Workers (Phase 3.3):** Standalone `cloudforge-worker.jar` supporting `DOCKER_ISOLATED`, `GITHUB_SOURCE`, `OCI_BUILDKIT`, and `KUBERNETES_DEPLOY` modes. Control-plane scheduler enforces deterministic pessimistic lock ordering (`Worker -> Run -> Stage -> Attempt`), unique `leaseToken` + monotonic `fencingGeneration`, retry backoff, active cancellation, stale-lease recovery, and sanitized bounded execution logs.
+- **Docker Isolation:** Allowlisted local operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`) execute in ephemeral containers (`--rm`, `--user 65534:65534`, `--cap-drop=ALL`, `no-new-privileges`, `--read-only`, bounded `noexec` `/tmp`, `--network=none`, CPU/memory/PID limits).
+
+### 3.4 Encrypted Secret Management (`secrets/`)
+- **Envelope Encryption (Phase 3.4):** Fresh 256-bit DEKs (`AES-256-GCM`, 96-bit CSPRNG nonces, 128-bit GCM auth tags, deterministic length-prefixed AAD binding workspace/project/environment/secret/version/format) wrapped by external versioned 256-bit KEKs (`EnvKeyringSecretKeyProvider`).
+- **Controls:** `OWNER`-only write-only metadata APIs (`Cache-Control: no-store`), queue-time immutable version pinning without decrypting, lease-bound worker delivery (disabled by default, locked `false` in Render), operator DEK batch rewrapping, cooldown-throttled `SECRET_ACCESS_DENIED` audits, and multi-layer secret redaction (`LogSanitizer`, `AttemptSecretRedactionService`, `WorkerSecretRedactor`).
+
+### 3.5 Source Acquisition, OCI Builds & Immutable Artifacts (`source/`, `oci/`)
+- **Source Acquisition (Phase 3.5A):** Queue-time resolution of refs to 40-character GitHub commit SHAs, single-grant archive delivery to allowlisted `GITHUB_SOURCE` workers, bounded ZIP extraction (32 MiB ZIP / 128 MiB extracted / 12,000 entries), symlink/path-traversal rejection, and verified source handoffs.
+- **OCI Builds & Publishing (Phase 3.5B):** Defensive `DockerfilePolicyValidator`, dedicated `OCI_BUILDKIT` builds producing verified local OCI Image Layout TARs (`--network=none` default, zero registry credentials during build), separate `OCI_IMAGE_PUBLISH` stage resolving encrypted registry credentials with SSRF/DNS checks and zeroing credential buffers, independent manifest SHA-256 re-verification, and `RECONCILIATION_REQUIRED` handling for interrupted publishes.
+
+### 3.6 Kubernetes Deployment Engine, Release History & Rollback (`k8s/`)
+- **Cluster & Namespace Security (Phase 3.6):** `OWNER`-only HTTPS cluster registration with explicit X.509 CA PEM pinning, operator API host allowlist + SSRF blocking, Phase 3.4 encrypted ServiceAccount tokens, worker-side `SelfSubjectAccessReview` least-privilege validation (rejecting cluster-admin), and operator-approved namespace templates (`Restricted` PSA, `ResourceQuota`, `LimitRange`, `NetworkPolicy`, namespace `Role`/`RoleBinding`).
+- **Declarative Workloads:** Strictly `apps/v1 Deployment` + `v1 ClusterIP Service` consuming verified `@sha256:` artifacts, identical backend/worker SHA-256 manifest checksums, `io.kubernetes:client-java:21.0.2` with `setVerifyingSsl(true)` and `followRedirects(false)`, Server-Side Apply (`force=false`), ownership-label guard, pod diagnostics, strict readiness + digest verification, and explicit `OWNER` production approval.
+- **Release History, Rollback & Reconciliation (Phase 3.7):** Monotonic target-scoped `revision_number` sequence (`DEPLOYMENT`, `ROLLBACK`, `RECONCILIATION`), structured diffs, preview-bound `expectedOperationId` preconditions, worker UID/generation preconditions, prefixed checksum fail-closed fencing, and owner-triggered read-only live cluster reconciliation.
+
+### 3.7 Observability & DevSecOps Supply-Chain Verification (`monitoring/`, `supplychain/`, `infrastructure/monitoring/`, `infrastructure/supplychain/`)
+- **Observability (Phase 4):** `OperationMetrics` records committed domain audit/OCI actions into `cloudforge_operations_total{action=...}`; `application-monitoring.yml` enables `/actuator/prometheus` (protected by `ScrapeSecurity`), HTTP latency histograms, and ECS structured JSON logs (scoped in `logback-spring.xml` under `<springProfile name="monitoring">`). `WorkerTelemetry` atomically publishes `cloudforge.prom` cross-platform for `node-exporter` scraping.
+- **Signed Artifact Evidence (Phase 4):** Operator workflow (`infrastructure/supplychain/assess-image.sh`) runs Trivy vulnerability scan + CycloneDX SBOM generation + Cosign signing and produces an ECDSA-signed JSON envelope submitted to `POST /api/workspaces/{workspaceId}/security/artifacts/{artifactId}/assessments` (`OWNER` + CSRF). `ArtifactEvidenceService` verifies signatures against `cloudforge.supplychain.public-key` (raw DER Base64 or Cosign PEM), persists `artifact_security_evidence`, and enforces `requireProductionApproval` on production Kubernetes execution (failing closed if evidence is missing, >24h stale, or has any `HIGH`/`CRITICAL` finding).
+
+---
+
+## 4. Database Schema (Flyway Migrations `V1`–`V11`)
+
+Located under `backend/src/main/resources/db/migration/` (37 application tables + `flyway_schema_history`):
+
+| Migration | Tables / Changes |
+| --- | --- |
+| `V1__phase2_core_schema.sql` | `users`, `workspaces`, `workspace_members`, `github_installations`, `linked_repositories`, `projects`, `project_environments`, `audit_events` |
+| `V2__webhook_deliveries.sql` | `webhook_deliveries` |
+| `V3__github_actions_workflows.sql` | `github_workflows`, `github_workflow_runs` |
+| `V4__pipeline_orchestration_engine.sql` | `pipeline_definitions`, `pipeline_stage_definitions`, `pipeline_runs`, `pipeline_stage_runs`, `pipeline_run_events`, `pipeline_idempotency_keys` |
+| `V5__isolated_worker_execution.sql` | `worker_nodes`, `worker_credentials`, `stage_execution_attempts`, `stage_execution_logs` + run/stage execution columns |
+| `V6__encrypted_secret_management.sql` | `environment_secrets`, `environment_secret_versions`, `pipeline_run_secret_references`, `secret_key_rotation_runs` + pipeline secret binding columns |
+| `V7__container_builds_oci_registry.sql` | `GITHUB_SOURCE` worker adapter constraint + `source_archive_issued_at` |
+| `V8__oci_builds_and_registry_artifacts.sql` | `oci_registry_connections`, `oci_source_handoffs`, `oci_build_records`, `oci_image_artifacts`, `oci_publish_attempts`, `oci_artifact_events` |
+| `V9__kubernetes_deployment_engine.sql` | `kubernetes_cluster_connections`, `kubernetes_namespace_bindings`, `kubernetes_deployment_configs`, `kubernetes_deployment_operations`, `kubernetes_deployment_events` |
+| `V10__release_history_and_rollback.sql` | `revision_number`, `operation_kind`, `restored_release_id`, `expected_operation_id`, `guard_observation_id`, `operation_reason` + artifact retention protection |
+| `V11__security_evidence.sql` | `artifact_security_evidence` |
+
+---
+
+## 5. Deployment Topologies
+
+1. **Local Development:** `compose.yaml` (PostgreSQL 17 + Spring Boot) + Vite dev server (`:5173`) + optional standalone `cloudforge-worker.jar`, disposable `registry:2`, disposable K3s/kind cluster, and optional `compose.monitoring.yaml`.
+2. **Render Single-Origin Staging (`Dockerfile.render`):** Single non-root Java 17 container serving bundled React static assets + Spring Boot API on one HTTPS origin (`https://cloudforge-staging.onrender.com`), backed by Render PostgreSQL 17, with all execution workers and monitoring exporters disabled.
+3. **Kubernetes Frontend Reference (`frontend/Dockerfile` + `infrastructure/kubernetes/frontend/frontend.yaml`):** Hardened non-root Alpine Nginx SPA container + TLS Ingress routing `/api`, `/oauth2`, `/login/oauth2` to backend and `/` to frontend.

@@ -148,7 +148,7 @@ export function ProjectDetailPage() {
       );
       hydrateEnvForm(updated);
       setEnvSaveSuccess(
-        `${updated.name} environment configuration saved (no deployment triggered in Phase 2).`
+        `${updated.name} environment configuration saved (no deployment triggered).`
       );
     } catch (error) {
       if (error instanceof ApiClientError) {

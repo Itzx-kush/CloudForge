@@ -320,7 +320,7 @@ export function ProjectsPage() {
           ? `Persistent project registry for workspace "${activeWorkspace.name}".`
           : 'Self-service workspace project registry.'
       }
-      phaseBadge={{ label: 'Phase 2 PostgreSQL Persistence', tone: 'healthy' }}
+      phaseBadge={{ label: 'PostgreSQL Persistence', tone: 'healthy' }}
       actions={
         <button
           type="button"

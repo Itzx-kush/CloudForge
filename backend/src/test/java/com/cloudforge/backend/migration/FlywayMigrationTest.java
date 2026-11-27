@@ -25,7 +25,7 @@ class FlywayMigrationTest {
     @Test
     void appliesAllMigrationsAndCreatesExpectedTables() {
         MigrationInfo[] applied = flyway.info().applied();
-        assertThat(applied).hasSizeGreaterThanOrEqualTo(10);
+        assertThat(applied).hasSizeGreaterThanOrEqualTo(11);
 
         List<String> expectedTables = List.of(
                 "users",
@@ -63,7 +63,8 @@ class FlywayMigrationTest {
                 "kubernetes_namespace_bindings",
                 "kubernetes_deployment_configs",
                 "kubernetes_deployment_operations",
-                "kubernetes_deployment_events"
+                "kubernetes_deployment_events",
+                "artifact_security_evidence"
         );
 
         for (String table : expectedTables) {
