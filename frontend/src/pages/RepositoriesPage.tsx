@@ -640,11 +640,12 @@ export function RepositoriesPage() {
           <ShieldAlert size={18} />
         </div>
         <div>
-          <p className="cf-notice__title">Phase 2 Least-Privilege Boundary</p>
+          <p className="cf-notice__title">Least-Privilege GitHub App Boundary</p>
           <p className="cf-notice__text">
-            CloudForge requests read-only repository metadata through short-lived GitHub App
-            tokens and verifies webhooks via HMAC-SHA256. Repository code execution, container
-            builds, and deployment triggers remain disabled until Phase 3 isolated workers.
+            CloudForge uses short-lived GitHub App installation tokens and HMAC-SHA256 verified
+            webhooks for repository discovery and read-only workflow telemetry. Source acquisition
+            and container builds run only on explicitly allowlisted, isolated execution workers
+            when enabled by platform operators.
           </p>
         </div>
       </div>

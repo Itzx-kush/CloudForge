@@ -48,31 +48,31 @@ const PLATFORM_CAPABILITIES: PlatformCapability[] = [
     targetPhase: 'Phase 2',
     statusLabel: 'Implemented',
     tone: 'healthy',
-    details: 'HTTP-only sessions, CSRF protection, Flyway migrations, OWNER/DEVELOPER/VIEWER roles, and audit logs.',
+    details: 'HTTP-only sessions, CSRF protection, Flyway V1–V11 migrations, OWNER/DEVELOPER/VIEWER roles, and audit logs.',
   },
   {
     id: 'github-app-projects',
-    module: 'GitHub App Integration, Projects CRUD & Environments',
-    targetPhase: 'Phase 2',
+    module: 'GitHub App Integration, Actions Sync, Projects & Encrypted Secrets',
+    targetPhase: 'Phases 2–3.4',
     statusLabel: 'Implemented',
     tone: 'healthy',
-    details: 'Short-lived GitHub App tokens, HMAC-SHA256 webhooks, repository sync, projects, and non-secret environments.',
+    details: 'Short-lived GitHub App tokens, HMAC-SHA256 webhooks, read-only Actions sync, DAG pipelines, and AES-256-GCM secrets.',
   },
   {
     id: 'build-k8s',
-    module: 'Isolated Builds, Container Deployments & Kubernetes',
-    targetPhase: 'Phase 3',
-    statusLabel: 'Planned',
-    tone: 'planned',
-    details: 'Sandboxed build workers, image scanning, Kubernetes rollouts, and rollback.',
+    module: 'Isolated Workers, OCI Builds, Kubernetes Rollouts & Rollback',
+    targetPhase: 'Phases 3.3–3.7',
+    statusLabel: 'Worker-Gated',
+    tone: 'info',
+    details: 'Implemented in backend & standalone worker; disabled by default until trusted local/approved workers are enabled.',
   },
   {
     id: 'observability',
-    module: 'Prometheus Metrics, Grafana & DevSecOps Gates',
+    module: 'Prometheus Metrics, Grafana Dashboards & Signed Supply-Chain Evidence',
     targetPhase: 'Phase 4',
-    statusLabel: 'Planned',
-    tone: 'planned',
-    details: 'Cluster telemetry, alerting dashboards, encrypted secrets KMS, SBOM generation, and policy checks.',
+    statusLabel: 'Implemented',
+    tone: 'info',
+    details: 'Bearer-protected /actuator/prometheus, Grafana dashboards, alert rules, and signed Trivy/Cosign production artifact gates.',
   },
 ];
 
@@ -474,34 +474,36 @@ export function DashboardPage({ healthState }: DashboardPageProps) {
         </DashboardCard>
       </div>
 
-      <details className="cf-roadmap"><summary>Platform capabilities and roadmap</summary>
-      <div className="cf-notice cf-notice--warning">
+      <details className="cf-roadmap"><summary>Platform capabilities and runtime boundaries</summary>
+      <div className="cf-notice cf-notice--info">
         <div className="cf-notice__icon" aria-hidden="true">
           <ShieldCheck size={18} />
         </div>
         <div>
-          <p className="cf-notice__title">Phase 2 Security Boundary: Builds &amp; Deployments Remain Disabled</p>
+          <p className="cf-notice__title">Control-Plane Security Boundary &amp; Execution Isolation</p>
           <p className="cf-notice__text">
-            Phase 2 delivers real authentication, workspace RBAC, GitHub App repository discovery,
-            persistent projects, non-secret environments, and verified webhooks. Container builds,
-            secret vaults, and Kubernetes rollouts are intentionally deferred to Phases 3 and 4.
+            CloudForge implements Phases 1–4 across identity, GitHub App &amp; Actions sync,
+            encrypted secrets, DAG orchestration, OCI builds, Kubernetes deployments/rollback,
+            and observability. Execution workers, OCI BuildKit, and Kubernetes deployers are
+            physically isolated from the web control plane and remain disabled by default (including
+            on hosted Render staging) until explicitly configured.
           </p>
         </div>
       </div>
 
       <DashboardCard
         title="Platform Implementation Matrix"
-        subtitle="Completed Phases 1–2 capabilities alongside upcoming Phases 3–4 milestones"
+        subtitle="Implemented Phases 1–4 control-plane, worker-gated execution, and observability capabilities"
         icon={<Layers size={17} />}
         headerAction={
-          <StatusBadge label="Roadmap Alignment" tone="info" size="sm" />
+          <StatusBadge label="Phases 1–4 Complete" tone="healthy" size="sm" />
         }
       >
         <DataTable
           columns={CAPABILITY_COLUMNS}
           rows={PLATFORM_CAPABILITIES}
           getRowKey={(row) => row.id}
-          caption="CloudForge implemented and planned capabilities"
+          caption="CloudForge implemented platform capabilities and runtime boundaries"
         />
       </DashboardCard>
       </details>

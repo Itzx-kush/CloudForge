@@ -20,10 +20,10 @@ public class AppProperties {
     private String name = "CloudForge Backend";
 
     @NotBlank
-    private String version = "0.2.0-phase2";
+    private String version = "1.0.0";
 
     @NotBlank
-    private String phase = "Phase 2 — Identity, GitHub Integration & Persistent Workspaces";
+    private String phase = "Phases 1-4 - DevOps Control Plane, Orchestration, Delivery & Observability";
 
     @Min(1)
     @Max(30)

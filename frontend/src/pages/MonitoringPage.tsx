@@ -119,23 +119,27 @@ export function MonitoringPage({ healthState }: MonitoringPageProps) {
       {activeWorkspace && <WorkspaceOperations key={activeWorkspace.id} workspace={activeWorkspace.id} />}
 
       <DashboardCard
-        title="Spring Boot Actuator Endpoints (Active in Phase 1)"
-        subtitle="Standard operational health endpoints available on the backend"
+        title="Backend Operational &amp; Telemetry Endpoints"
+        subtitle="Public health probes alongside profile-gated private Prometheus scraping"
         icon={<Activity size={17} />}
         headerAction={<StatusBadge label="Active" tone="healthy" size="sm" />}
       >
         <dl className="cf-kv-list">
           <div className="cf-kv-item">
             <dt>Primary Platform Health API</dt>
-            <dd className="mono">GET /api/health</dd>
+            <dd className="mono">GET /api/health (public live PostgreSQL JDBC probe)</dd>
           </div>
           <div className="cf-kv-item">
             <dt>Actuator Health Probe</dt>
-            <dd className="mono">GET /actuator/health</dd>
+            <dd className="mono">GET /actuator/health (public liveness/readiness)</dd>
           </div>
           <div className="cf-kv-item">
             <dt>Actuator Application Info</dt>
-            <dd className="mono">GET /actuator/info</dd>
+            <dd className="mono">GET /actuator/info (public version metadata)</dd>
+          </div>
+          <div className="cf-kv-item">
+            <dt>Prometheus Metrics Scrape</dt>
+            <dd className="mono">GET /actuator/prometheus (monitoring profile + Bearer token only)</dd>
           </div>
           <div className="cf-kv-item">
             <dt>Structured Correlation Header</dt>

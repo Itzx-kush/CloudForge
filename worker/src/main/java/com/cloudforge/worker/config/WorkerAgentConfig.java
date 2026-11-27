@@ -47,7 +47,7 @@ public record WorkerAgentConfig(
     public static final String OCI_PUBLISH_OPERATION = "OCI_IMAGE_PUBLISH";
     public static final String KUBERNETES_DEPLOY_OPERATION = "KUBERNETES_DEPLOY";
     public static final String DEFAULT_EXECUTOR_IMAGE = "alpine:3.20";
-    public static final String AGENT_VERSION = "0.3.6-phase3.6";
+    public static final String AGENT_VERSION = "1.0.0";
 
     public WorkerAgentConfig(
             String controlPlaneBaseUrl,

@@ -883,12 +883,12 @@ export function PipelinesPage() {
       description="Inspect read-only GitHub Actions workflows alongside CloudForge's persistent pipeline definitions, stage DAGs, and orchestrated runs."
       phaseBadge={
         activeTab === 'orchestration'
-          ? { label: 'Phase 3.2–3.5 · Pipeline Orchestration', tone: 'info' }
+          ? { label: 'Pipeline Orchestration', tone: 'info' }
           : activeTab === 'artifacts'
-            ? { label: 'Phase 3.5B · OCI Builds & Artifacts', tone: 'healthy' }
+            ? { label: 'OCI Builds & Artifacts', tone: 'healthy' }
             : {
                 label: overview?.githubAppConfigured
-                  ? 'Phase 3.1 · GitHub Actions Read-Only'
+                  ? 'GitHub Actions Read-Only'
                   : 'GitHub App Setup Required',
                 tone: overview?.githubAppConfigured ? 'healthy' : 'degraded',
               }
@@ -1531,18 +1531,19 @@ export function PipelinesPage() {
         </>
       )}
 
-      {/* Read-only Phase 3.1 boundary notice */}
+      {/* Read-only GitHub Actions boundary notice */}
       <div className="cf-notice cf-notice--info">
         <div className="cf-notice__icon" aria-hidden="true">
           <Info size={18} />
         </div>
         <div>
-          <p className="cf-notice__title">Phase 3.1 Read-Only GitHub Actions Integration</p>
+          <p className="cf-notice__title">Read-Only GitHub Actions Telemetry</p>
           <p className="cf-notice__text">
-            CloudForge inspects GitHub Actions workflows, executions, and jobs strictly read-only
+            This view inspects GitHub Actions workflows, executions, and jobs strictly read-only
             using least-privilege <span className="mono">Actions: Read</span> installation tokens.
-            Pipeline orchestration, isolated container build workers, encrypted secrets, and
-            Kubernetes deployments remain deferred to Phases 3.2–3.7.
+            Use <strong>CloudForge Pipelines</strong>, <strong>Builds &amp; Artifacts</strong>, and{' '}
+            <strong>Deployments</strong> to manage orchestrated DAG runs, OCI image builds, and
+            Kubernetes rollouts when isolated execution workers are enabled.
           </p>
         </div>
       </div>

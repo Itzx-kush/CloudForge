@@ -84,8 +84,8 @@ info:
 
 cloudforge:
   name: CloudForge Backend
-  version: 0.2.0-phase2
-  phase: Phase 2 — Identity, GitHub Integration & Persistent Workspaces
+  version: 1.0.0
+  phase: Phases 1-4 - DevOps Control Plane, Orchestration, Delivery & Observability
   database-check-timeout-seconds: 3
   cors:
     allowed-origins: ${CLOUDFORGE_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}

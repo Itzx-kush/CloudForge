@@ -13,9 +13,9 @@
 
     <groupId>com.cloudforge</groupId>
     <artifactId>backend</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
+    <version>1.0.0</version>
     <name>cloudforge-backend</name>
-    <description>CloudForge Phase 2 Spring Boot Backend API</description>
+    <description>CloudForge DevOps Control Plane Spring Boot Backend API (Phases 1–4)</description>
 
     <properties>
         <java.version>17</java.version>

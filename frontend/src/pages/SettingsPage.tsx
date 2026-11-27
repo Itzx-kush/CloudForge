@@ -336,7 +336,7 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
     <PageContainer
       title="Settings"
       description="Account profile, workspace RBAC membership, GitHub integration status, and workspace audit history."
-      phaseBadge={{ label: 'Phase 2 Identity & RBAC', tone: 'healthy' }}
+      phaseBadge={{ label: 'Identity, RBAC & Audit', tone: 'healthy' }}
     >
       <Appearance />
       {notice && <Toast message={notice} onDismiss={() => setNotice(null)} />}
@@ -642,6 +642,18 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
                 <option value="MEMBER_ROLE_UPDATED">MEMBER_ROLE_UPDATED</option>
                 <option value="GITHUB_INSTALLATION_LINKED">GITHUB_INSTALLATION_LINKED</option>
                 <option value="GITHUB_INSTALLATION_SYNCED">GITHUB_INSTALLATION_SYNCED</option>
+                <option value="PIPELINE_RUN_REQUESTED">PIPELINE_RUN_REQUESTED</option>
+                <option value="PIPELINE_RUN_SUCCEEDED">PIPELINE_RUN_SUCCEEDED</option>
+                <option value="PIPELINE_RUN_FAILED">PIPELINE_RUN_FAILED</option>
+                <option value="PIPELINE_RUN_CANCELLED">PIPELINE_RUN_CANCELLED</option>
+                <option value="SECRET_CREATED">SECRET_CREATED</option>
+                <option value="SECRET_ROTATED">SECRET_ROTATED</option>
+                <option value="SECRET_ACCESS_DENIED">SECRET_ACCESS_DENIED</option>
+                <option value="OCI_ARTIFACT_PUBLISHED_VERIFIED">OCI_ARTIFACT_PUBLISHED_VERIFIED</option>
+                <option value="KUBERNETES_DEPLOYMENT_REQUESTED">KUBERNETES_DEPLOYMENT_REQUESTED</option>
+                <option value="KUBERNETES_DEPLOYMENT_SUCCEEDED">KUBERNETES_DEPLOYMENT_SUCCEEDED</option>
+                <option value="KUBERNETES_ROLLBACK_REQUESTED">KUBERNETES_ROLLBACK_REQUESTED</option>
+                <option value="SECURITY_EVIDENCE_RECORDED">SECURITY_EVIDENCE_RECORDED</option>
               </select>
             </div>
 
@@ -691,24 +703,28 @@ export function SettingsPage({ healthState }: SettingsPageProps) {
       </DashboardCard>
 
       <DashboardCard
-        title="Deferred Platform Capabilities (Phases 3–4)"
-        subtitle="Explicitly deferred until isolated build workers and KMS integrations are built"
+        title="Execution &amp; Observability Runtime Boundaries"
+        subtitle="Phase 3–4 capabilities are implemented and fail closed unless dedicated worker or monitoring infrastructure is configured"
         icon={<ServerCog size={17} />}
-        headerAction={<StatusBadge label="Phases 3–4" tone="planned" size="sm" />}
+        headerAction={<StatusBadge label="Fail-Closed Defaults" tone="info" size="sm" />}
       >
         <div className="cf-grid cf-grid--2">
           <div className="cf-step">
-            <span className="cf-step__index">Phase 3</span>
-            <h3 className="cf-step__title">Encrypted Secret Store &amp; Clusters</h3>
+            <span className="cf-step__index">Execution Plane</span>
+            <h3 className="cf-step__title">Encrypted Secrets, OCI Builds &amp; Kubernetes</h3>
             <p className="cf-step__desc">
-              KMS / External Secrets Manager integration and namespace-scoped Kubernetes deployment targets.
+              AES-256-GCM environment secrets, isolated BuildKit workers, and namespace-scoped
+              Kubernetes rollouts/rollback are available in local and approved-cluster setups and
+              remain disabled on hosted Render staging.
             </p>
           </div>
           <div className="cf-step">
-            <span className="cf-step__index">Phase 4</span>
-            <h3 className="cf-step__title">Observability &amp; DevSecOps Policy</h3>
+            <span className="cf-step__index">Observability &amp; DevSecOps</span>
+            <h3 className="cf-step__title">Telemetry &amp; Signed Artifact Evidence</h3>
             <p className="cf-step__desc">
-              Prometheus/Grafana alerting channels, Trivy CVE policy gates, and SBOM retention rules.
+              Prometheus/Grafana scraping requires the monitoring profile and bearer token; production
+              Kubernetes execution requires current signed Trivy/Cosign artifact evidence with zero
+              high or critical vulnerabilities.
             </p>
           </div>
         </div>

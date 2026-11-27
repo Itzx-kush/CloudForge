@@ -1060,14 +1060,15 @@ export function CloudForgePipelinesPanel() {
         </div>
         <div>
           <p className="cf-notice__title">
-            Phase 3.2 Orchestration Engine — Persistent Definitions, DAG Scheduling &amp; State Machine
+            CloudForge Pipeline Orchestration — Persistent Definitions, DAG Scheduling &amp; State Machine
           </p>
           <p className="cf-notice__text">
             CloudForge pipeline definitions and runs are distinct from GitHub Actions workflows.
             Queueing a run persists an immutable definition snapshot and marks root stages{' '}
-            <span className="mono">READY</span> while the run remains{' '}
-            <strong>Queued — Awaiting execution infrastructure</strong> until Phase 3.3 isolated
-            build workers are introduced.
+            <span className="mono">READY</span>. When isolated execution workers are disabled or
+            offline in this environment, runs stay honestly{' '}
+            <strong>Queued — Awaiting execution infrastructure</strong> until an authorized worker
+            claims them.
           </p>
         </div>
       </div>
@@ -1113,7 +1114,7 @@ export function CloudForgePipelinesPanel() {
           <div className="cf-stat-tile__value" data-testid="orch-queued-count">
             {isLoading ? '—' : queuedRunCount}
           </div>
-          <div className="cf-stat-tile__meta">Awaiting Phase 3.3 worker engine</div>
+          <div className="cf-stat-tile__meta">Awaiting available execution worker</div>
         </div>
 
         <div className="cf-stat-tile">
@@ -2075,8 +2076,8 @@ export function CloudForgePipelinesPanel() {
                 <p className="cf-notice__title">Queued — Awaiting execution infrastructure</p>
                 <p className="cf-notice__text">
                   Queueing persists an immutable execution request and evaluates root stage
-                  readiness. No build or deployment executes until Phase 3.3 isolated workers are
-                  deployed.
+                  readiness. Stages execute only when an authorized isolated worker matching the
+                  configured operation is online and enabled in this environment.
                 </p>
               </div>
             </div>

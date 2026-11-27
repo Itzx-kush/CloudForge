@@ -110,10 +110,14 @@ export function LoginPage({ healthState }: LoginPageProps) {
               <p className="cf-notice__title">GitHub OAuth Setup Required</p>
               <p className="cf-notice__text">
                 Configure <span className="mono">GITHUB_OAUTH_CLIENT_ID</span> and{' '}
-                <span className="mono">GITHUB_OAUTH_CLIENT_SECRET</span> in your local{' '}
-                <span className="mono">.env</span> file, register callback URL{' '}
-                <span className="mono">http://localhost:5173/login/oauth2/code/github</span>,
-                and restart the backend. See{' '}
+                <span className="mono">GITHUB_OAUTH_CLIENT_SECRET</span> in your backend
+                environment, register callback URL{' '}
+                <span className="mono">
+                  {typeof window !== 'undefined' && window.location.origin
+                    ? `${window.location.origin}/login/oauth2/code/github`
+                    : '/login/oauth2/code/github'}
+                </span>
+                , and restart the backend. See{' '}
                 <span className="mono">docs/GITHUB_INTEGRATION.md</span>.
               </p>
             </div>
@@ -155,7 +159,7 @@ export function LoginPage({ healthState }: LoginPageProps) {
         </ul>
 
         <div className="cf-login__footer">
-          <span className="mono cf-muted">Phase 2 · Identity &amp; Workspaces</span>
+          <span className="mono cf-muted">CloudForge v1.0 · DevOps Control Plane</span>
           <StatusBadge
             label={
               payload
