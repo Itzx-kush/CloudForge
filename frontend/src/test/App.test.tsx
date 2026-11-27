@@ -17,8 +17,8 @@ function jsonResponse(body: unknown, status = 200, requestId = 'req-test-1'): Re
 
 const HEALTH_UP = {
   application: 'CloudForge Backend',
-  version: '0.2.0-phase2',
-  phase: 'Phase 2 — Identity, GitHub Integration & Persistent Workspaces',
+  version: '1.0.0',
+  phase: 'Phases 1-4 - DevOps Control Plane, Orchestration, Delivery & Observability',
   status: 'UP',
   database: {
     status: 'UP',
@@ -114,6 +114,24 @@ function createAuthenticatedFetchMock(overrides?: {
     const method = (init?.method ?? 'GET').toUpperCase();
 
     if (url.endsWith('/security/assessments')) return jsonResponse([]);
+    if (url.includes('/pipelines/workers/status')) {
+      return jsonResponse({
+        workerPlaneEnabled: false,
+        schedulerEnabled: false,
+        registeredWorkers: 0,
+        availableWorkers: 0,
+        busyWorkers: 0,
+        drainingWorkers: 0,
+        offlineWorkers: 0,
+        activeAssignments: 0,
+        workspaceReadyStages: 0,
+        workspaceRunningStages: 0,
+        workspaceFailedAttempts: 0,
+        supportedOperations: ['ENV_VALIDATION', 'CONTROLLED_SMOKE_TEST', 'WORKER_DIAGNOSTICS'],
+        workers: [],
+        sampledAt: '2026-11-27T00:00:00Z',
+      });
+    }
     if (url.startsWith('/api/health')) {
       if (typeof overrides?.health === 'function') {
         return overrides.health();
@@ -568,5 +586,59 @@ describe('CloudForge Phase 2 Web Console', () => {
     });
     expect(screen.getByText('CONNECTED')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Link to Project/i })).toBeInTheDocument();
+  });
+
+  it('shows honest disabled execution plane status and signed security assessments on Monitoring page', async () => {
+    const sampleSbom = 'a'.repeat(64);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.startsWith('/api/health')) return jsonResponse(HEALTH_UP);
+      if (url.startsWith('/api/auth/config')) return jsonResponse(AUTH_CONFIG_READY);
+      if (url.startsWith('/api/auth/me')) return jsonResponse(AUTH_ME_OWNER);
+      if (url.includes('/pipelines/workers/status')) {
+        return jsonResponse({
+          workerPlaneEnabled: false,
+          schedulerEnabled: false,
+          registeredWorkers: 0,
+          availableWorkers: 0,
+          busyWorkers: 0,
+          drainingWorkers: 0,
+          offlineWorkers: 0,
+          activeAssignments: 0,
+          workspaceReadyStages: 2,
+          workspaceRunningStages: 0,
+          workspaceFailedAttempts: 1,
+          supportedOperations: ['ENV_VALIDATION'],
+          workers: [],
+          sampledAt: '2026-11-27T00:00:00Z',
+        });
+      }
+      if (url.endsWith('/security/assessments')) {
+        return jsonResponse([
+          {
+            artifact: 'art-verified-1',
+            assessedAt: 1764000000,
+            critical: 0,
+            high: 0,
+            sbomSha256: sampleSbom,
+          },
+        ]);
+      }
+      return jsonResponse({}, 200);
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/monitoring']}>
+        <AppRoutes />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Execution Plane Disabled')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/2 queued · 0 running · 1 failed attempts/i)).toBeInTheDocument();
+    expect(screen.getByText('0 critical · 0 high')).toBeInTheDocument();
+    expect(screen.getByText('Zero High/Critical')).toBeInTheDocument();
+    expect(screen.getByText('art-verified-1')).toBeInTheDocument();
   });
 });

@@ -38,8 +38,8 @@ class HealthControllerTest {
     void returnsOkWhenApplicationAndDatabaseAreUp() throws Exception {
         HealthResponse response = new HealthResponse(
                 "CloudForge Backend",
-                "0.2.0-phase2",
-                "Phase 2 — Identity, GitHub Integration & Persistent Workspaces",
+                "1.0.0",
+                "Phases 1-4 - DevOps Control Plane, Orchestration, Delivery & Observability",
                 HealthService.STATUS_UP,
                 new DatabaseHealthDto("UP", "PostgreSQL 17.4", 4L, "Database connection verified"),
                 Instant.parse("2026-11-23T06:00:00Z")
@@ -51,7 +51,7 @@ class HealthControllerTest {
         mockMvc.perform(get("/api/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.application").value("CloudForge Backend"))
-                .andExpect(jsonPath("$.version").value("0.2.0-phase2"))
+                .andExpect(jsonPath("$.version").value("1.0.0"))
                 .andExpect(jsonPath("$.status").value("UP"))
                 .andExpect(jsonPath("$.database.status").value("UP"))
                 .andExpect(jsonPath("$.database.engine").value("PostgreSQL 17.4"))
@@ -63,8 +63,8 @@ class HealthControllerTest {
     void returnsServiceUnavailableWhenDatabaseIsDown() throws Exception {
         HealthResponse response = new HealthResponse(
                 "CloudForge Backend",
-                "0.2.0-phase2",
-                "Phase 2 — Identity, GitHub Integration & Persistent Workspaces",
+                "1.0.0",
+                "Phases 1-4 - DevOps Control Plane, Orchestration, Delivery & Observability",
                 HealthService.STATUS_DEGRADED,
                 new DatabaseHealthDto("DOWN", "PostgreSQL", 3001L, "Database connectivity check failed"),
                 Instant.parse("2026-11-23T06:05:00Z")

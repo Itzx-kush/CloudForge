@@ -228,6 +228,9 @@ class KubernetesDeploymentEngineIntegrationTest {
         ephemeralTestCaPem = sw.toString();
     }
 
+    private static final java.util.concurrent.atomic.AtomicLong UID_SEQUENCE =
+            new java.util.concurrent.atomic.AtomicLong(850_000L);
+
     @BeforeEach
     void setUp() throws Exception {
         secretAuditService.clearRateLimitState();
@@ -239,7 +242,7 @@ class KubernetesDeploymentEngineIntegrationTest {
         k8sProperties.setAllowedApiHosts("127.0.0.1:16443,127.0.0.1:26443");
         k8sProperties.setAllowedWorkerIds("k8s-worker-1,k8s-worker-2");
 
-        long uid = 85000L + (System.nanoTime() % 10000);
+        long uid = UID_SEQUENCE.getAndAdd(10L);
         owner = userAccountService.upsertFromGitHubOAuth(uid, "k8s-owner-" + uid, "K8s Owner", null, null, null);
         developer = userAccountService.upsertFromGitHubOAuth(uid + 1, "k8s-dev-" + uid, "K8s Dev", null, null, null);
         viewer = userAccountService.upsertFromGitHubOAuth(uid + 2, "k8s-view-" + uid, "K8s Viewer", null, null, null);
@@ -253,7 +256,7 @@ class KubernetesDeploymentEngineIntegrationTest {
 
         GitHubInstallationEntity inst = new GitHubInstallationEntity();
         inst.setWorkspace(workspaceA);
-        inst.setGithubInstallationId(850000L + (uid % 999));
+        inst.setGithubInstallationId(1_850_000L + uid);
         inst.setAccountLogin("cloudforge-org");
         inst.setAccountType("Organization");
         inst.setStatus(InstallationStatus.ACTIVE);
@@ -262,7 +265,7 @@ class KubernetesDeploymentEngineIntegrationTest {
         repoA = new LinkedRepositoryEntity();
         repoA.setWorkspace(workspaceA);
         repoA.setInstallation(inst);
-        repoA.setGithubRepoId(881000L + (uid % 999));
+        repoA.setGithubRepoId(2_881_000L + uid);
         repoA.setOwnerLogin("cloudforge-org");
         repoA.setName("payments-service");
         repoA.setFullName("cloudforge-org/payments-service");
