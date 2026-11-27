@@ -3,6 +3,7 @@ package com.cloudforge.worker.agent;
 import java.io.IOException;
 import java.nio.file.*;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.concurrent.atomic.LongAdder;
 import org.slf4j.LoggerFactory;
 
@@ -29,19 +30,34 @@ final class WorkerTelemetry {
         else failures++;
         Path pending = null;
         try {
+            Files.createDirectories(directory);
             pending = Files.createTempFile(directory, ".worker-", ".tmp");
-            Files.writeString(pending, """
+            String payload = String.format(
+                    Locale.ROOT,
+                    """
                     cloudforge_worker_last_heartbeat_seconds %d
                     cloudforge_worker_active_assignments %d
                     cloudforge_worker_heartbeat_failures_total %d
                     cloudforge_worker_assignments_total %d
-                    cloudforge_worker_assignment_seconds_total %s
-                    """.formatted(lastSuccess, active, failures, assignments.sum(), durationNanos.sum() / 1e9));
-            Files.setPosixFilePermissions(pending, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
-            Files.move(pending, directory.resolve("cloudforge.prom"), StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException | UnsupportedOperationException ex) {
-            LoggerFactory.getLogger(WorkerTelemetry.class).debug("Worker metric snapshot unavailable");
+                    cloudforge_worker_assignment_seconds_total %.6f
+                    """,
+                    lastSuccess, active, failures, assignments.sum(), durationNanos.sum() / 1e9
+            );
+            Files.writeString(pending, payload);
+            try {
+                Files.setPosixFilePermissions(pending, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+            } catch (UnsupportedOperationException ignored) {
+                // Non-POSIX filesystems (e.g., Windows NTFS) do not support POSIX permission bits.
+            }
+            Path target = directory.resolve("cloudforge.prom");
+            try {
+                Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException ex) {
+                Files.move(pending, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            pending = null;
+        } catch (IOException ex) {
+            LoggerFactory.getLogger(WorkerTelemetry.class).debug("Worker metric snapshot unavailable: {}", ex.getMessage());
         } finally {
             if (pending != null) {
                 try { Files.deleteIfExists(pending); } catch (IOException ignored) { }

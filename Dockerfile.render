@@ -1,6 +1,6 @@
 # CloudForge Render staging: build React and Spring Boot into one same-origin web service.
 # The existing backend/Dockerfile and local Docker Compose workflow are unchanged.
-FROM node:22-alpine AS frontend-build
+FROM node:24-alpine AS frontend-build
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -11,10 +11,10 @@ FROM maven:3.9.9-eclipse-temurin-17-alpine AS backend-build
 WORKDIR /workspace
 COPY backend/pom.xml ./
 COPY infrastructure/docker/maven-settings-render.xml /root/.m2/settings.xml
-RUN mvn -B -ntp dependency:go-offline
+RUN mvn -B -ntp -Daether.connector.connectTimeout=15000 -Daether.connector.requestTimeout=60000 -Daether.connector.http.retryHandler.count=3 dependency:go-offline
 COPY backend/src ./src
 COPY --from=frontend-build /frontend/dist/ ./src/main/resources/static/
-RUN mvn -B -ntp clean package -DskipTests
+RUN mvn -B -ntp -Daether.connector.connectTimeout=15000 -Daether.connector.requestTimeout=60000 -Daether.connector.http.retryHandler.count=3 clean package -DskipTests
 
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
@@ -23,4 +23,4 @@ COPY --from=backend-build /workspace/target/cloudforge-backend.jar /app/app.jar
 RUN chown -R cloudforge:cloudforge /app
 USER cloudforge
 EXPOSE 10000
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=65.0", "-Djava.security.egd=file:/dev/./urandom", "-jar", "/app/app.jar"]
+ENTRYPOINT ["java", "-XX:InitialRAMPercentage=20.0", "-XX:MaxRAMPercentage=55.0", "-Djava.security.egd=file:/dev/./urandom", "-jar", "/app/app.jar"]

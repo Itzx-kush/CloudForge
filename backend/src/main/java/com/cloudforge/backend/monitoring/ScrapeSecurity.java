@@ -17,14 +17,15 @@ public class ScrapeSecurity {
     @Order(0)
     SecurityFilterChain scrapeChain(HttpSecurity http,
             @Value("${cloudforge.monitoring.token:}") String token) throws Exception {
-        byte[] expected = ("Bearer " + token).getBytes(StandardCharsets.UTF_8);
+        String normalizedToken = token == null ? "" : token.trim();
+        byte[] expected = ("Bearer " + normalizedToken).getBytes(StandardCharsets.UTF_8);
         return http.securityMatcher("/actuator/prometheus", "/actuator/prometheus/**")
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .requestCache(c -> c.disable())
                 .authorizeHttpRequests(a -> a.anyRequest().access((auth, context) -> {
                     var request = context.getRequest();
                     String header = request.getHeader("Authorization");
-                    boolean allowed = token.length() >= 32 && "GET".equals(request.getMethod())
+                    boolean allowed = normalizedToken.length() >= 32 && "GET".equals(request.getMethod())
                             && header != null && MessageDigest.isEqual(expected, header.getBytes(StandardCharsets.UTF_8));
                     return new AuthorizationDecision(allowed);
                 })).build();

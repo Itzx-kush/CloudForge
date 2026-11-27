@@ -28,7 +28,7 @@ public class ProjectSourceService {
 
     public ProjectSourceService(
             GitHubSourceClient github,
-            @Value("${CLOUDFORGE_SOURCE_ACQUISITION_ENABLED:false}") boolean enabled,
+            @Value("${cloudforge.source.enabled:${CLOUDFORGE_SOURCE_ACQUISITION_ENABLED:false}}") boolean enabled,
             @Value("${CLOUDFORGE_SOURCE_ALLOWED_REPOSITORY_IDS:}") String repositories,
             @Value("${CLOUDFORGE_SOURCE_ALLOWED_WORKER_IDS:}") String workers
     ) {
