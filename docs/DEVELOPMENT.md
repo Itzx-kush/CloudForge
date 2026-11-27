@@ -1,22 +1,23 @@
 # CloudForge Local Development Guide
 
-This guide covers setting up, running, testing, migrating, and troubleshooting CloudForge (Phases 1–3.6) on Windows 11 (PowerShell + WSL 2 Docker Desktop), macOS, and Linux.
+This guide covers setting up, running, testing, migrating, and troubleshooting **CloudForge v1.0.0 (Phases 1–4)** on Windows 11 (PowerShell + WSL 2 Docker Desktop), macOS, and Linux.
 
 ---
 
-## 1. Environment Setup
+## 1. Prerequisites & Environment Setup
 
 1. Verify installed tool versions:
    ```powershell
-   java -version        # Java 17
+   java -version        # Java 17 (Temurin)
    mvn -version         # Apache Maven 3.9+
    node -v              # Node.js 24+ (20+ compatible)
    npm -v               # npm 11+
    docker --version
    docker compose version
+   kubectl version --client   # Optional: local Kubernetes testing
    ```
 
-2. Create a local `.env` file from `.env.example` (never committed to Git):
+2. Create a local `.env` file from `.env.example` (ignored by Git):
    ```powershell
    Copy-Item .env.example .env
    git check-ignore -v .env
@@ -30,7 +31,7 @@ This guide covers setting up, running, testing, migrating, and troubleshooting C
 
 ### Recommended Workflow (Docker Compose Backend + PostgreSQL, Local Vite Frontend)
 
-1. Build and start PostgreSQL 17 and the Spring Boot backend (preserves existing `cloudforge_postgres_data` volume and applies Flyway migrations `V1` and `V2` automatically):
+1. Build and start PostgreSQL 17 and the Spring Boot backend (preserves existing `cloudforge_postgres_data` volume and applies Flyway migrations `V1`–`V11` automatically):
    ```powershell
    docker compose up -d --build
    ```
@@ -39,9 +40,8 @@ This guide covers setting up, running, testing, migrating, and troubleshooting C
    ```powershell
    docker compose ps
    docker compose logs --tail=50 backend
-   docker exec cloudforge-postgres psql -U cloudforge -d cloudforge -c "\dt"
+   docker exec cloudforge-postgres psql -U cloudforge -d cloudforge -c "SELECT installed_rank, version, description, success FROM flyway_schema_history ORDER BY installed_rank;"
    ```
-   Wait until both `cloudforge-postgres` and `cloudforge-backend` report `(healthy)`.
 
 3. Test the public backend health and auth config APIs:
    ```powershell
@@ -49,144 +49,135 @@ This guide covers setting up, running, testing, migrating, and troubleshooting C
    Invoke-RestMethod http://localhost:8080/api/auth/config
    ```
 
-4. Install and start the React frontend:
+4. Start the React frontend:
    ```powershell
    cd frontend
-   npm install
+   npm ci
    npm run dev
    ```
 
-5. Open **http://localhost:5173**. Vite (`frontend/vite.config.ts`) proxies `/api/*`, `/actuator/*`, `/oauth2/*`, and `/login/oauth2/*` to `http://localhost:8080` with `X-Forwarded-*` headers enabled so HTTP-only session cookies and CSRF cookies stay same-origin.
+5. Open **http://localhost:5173**. Vite proxies `/api/*`, `/actuator/*`, `/oauth2/*`, and `/login/oauth2/*` to `http://localhost:8080` with `X-Forwarded-*` headers so HTTP-only session cookies and CSRF cookies stay same-origin.
 
 ### Host-Native Backend Workflow (Rapid Java Iteration)
 
-1. Start only PostgreSQL 17 in Docker:
-   ```powershell
-   docker compose up -d postgres
-   ```
-2. Run Spring Boot with Maven on the host (connects to `localhost:5432` and runs Flyway migrations):
-   ```powershell
-   cd backend
-   mvn spring-boot:run
-   ```
-3. Run the Vite frontend in another terminal:
-   ```powershell
-   cd frontend
-   npm run dev
-   ```
+```powershell
+# Terminal 1: Start only PostgreSQL 17 in Docker
+docker compose up -d postgres
+
+# Terminal 2: Run Spring Boot on the host
+cd backend
+mvn spring-boot:run
+
+# Terminal 3: Run the Vite frontend
+cd frontend
+npm run dev
+```
 
 ---
 
-## 3. Database Migrations (Flyway)
+## 3. Database Migrations (Flyway `V1`–`V11`)
 
-- Migrations live in `backend/src/main/resources/db/migration/` (`V1__phase2_core_schema.sql` through `V9__kubernetes_deployment_engine.sql`).
+- Migrations live in `backend/src/main/resources/db/migration/` (`V1__phase2_core_schema.sql` through `V11__security_evidence.sql`, creating 37 application tables).
 - Hibernate DDL generation is disabled (`spring.jpa.hibernate.ddl-auto: none` in runtime; `validate` in test profile).
-- **Do not run `docker compose down -v`** unless you explicitly intend to wipe your local PostgreSQL volume. Use `docker compose down` or `docker compose up -d --build` to preserve existing data across restarts.
-- Inspect applied migrations in PostgreSQL:
-  ```powershell
-  docker exec cloudforge-postgres psql -U cloudforge -d cloudforge -c "SELECT version, description, success, installed_on FROM flyway_schema_history ORDER BY installed_rank;"
-  ```
+- **Never run `docker compose down -v`** unless you explicitly intend to wipe your local PostgreSQL volume. Use `docker compose down` or `docker compose up -d --build` to preserve data.
+- Never modify applied migrations or run `flyway clean` against shared/staging databases.
 
 ---
 
-## 3.5 Running the Phase 3.3 Host-Side Isolated Worker (Optional Local Dev)
+## 4. Running Optional Execution & Observability Components
 
-By default, the worker execution plane is **disabled** (`CLOUDFORGE_WORKERS_ENABLED=false`, `CLOUDFORGE_WORKERS_SCHEDULER_ENABLED=false`) and always remains disabled in Render staging (`application-render.yml`). Never mount `/var/run/docker.sock` into the Spring Boot backend container.
+Every component below is modular and can be enabled independently without running the entire stack:
 
-To run a trusted host-side isolated Docker worker locally:
+### A. Host-Side Isolated Worker (`worker/`)
+By default, worker execution is **disabled** (`CLOUDFORGE_WORKERS_ENABLED=false`, locked `false` in `application-render.yml`). Never mount `/var/run/docker.sock` into the Spring Boot backend container.
 
-1. Generate a high-entropy per-worker token (>= 16 chars) and configure `.env` (never commit `.env`):
-   ```powershell
-   $token = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
-   # Set in .env for the backend control plane:
-   # CLOUDFORGE_WORKERS_ENABLED=true
-   # CLOUDFORGE_WORKERS_SCHEDULER_ENABLED=true
-   # CLOUDFORGE_WORKER_CREDENTIALS=local-docker-worker-1:key-local-1:<paste-token>
+1. Generate a per-worker secret (`>= 16` chars) in `.env`:
+   ```text
+   CLOUDFORGE_WORKERS_ENABLED=true
+   CLOUDFORGE_WORKERS_SCHEDULER_ENABLED=true
+   CLOUDFORGE_WORKER_CREDENTIALS=local-docker-worker-1:key-local-1:<32-char-secret>
    ```
-2. Restart the Spring Boot backend so it loads the hashed worker credential into memory and enables `/api/internal/workers/**`.
-3. Build the standalone worker executable JAR (`worker/target/cloudforge-worker.jar`):
+2. Package and run the standalone worker JAR:
    ```powershell
    cd worker
-   mvn -B clean package
-   ```
-4. Pre-pull the fixed allowlisted minimal executor image (`alpine:3.20`) and launch the host-side worker agent:
-   ```powershell
+   mvn -B package -DskipTests
    docker pull alpine:3.20
    $env:CLOUDFORGE_CONTROL_PLANE_URL = "http://127.0.0.1:8080"
    $env:CLOUDFORGE_WORKER_ID = "local-docker-worker-1"
-   $env:CLOUDFORGE_WORKER_TOKEN = "<paste-token>"
+   $env:CLOUDFORGE_WORKER_TOKEN = "<32-char-secret>"
    $env:CLOUDFORGE_EXECUTOR_IMAGE = "alpine:3.20"
-   java -jar worker/target/cloudforge-worker.jar
+   # Optional: publish Prometheus worker textfile metrics (works on Windows and Linux)
+   $env:CLOUDFORGE_WORKER_METRICS_DIR = "$env:TEMP\cloudforge-worker-metrics"
+   java -jar target/cloudforge-worker.jar
    ```
-5. In the CloudForge UI (`/pipelines` -> **CloudForge Pipelines**), create a pipeline definition using allowlisted Phase 3.3 operations (`ENV_VALIDATION`, `CONTROLLED_SMOKE_TEST`, `WORKER_DIAGNOSTICS`), click **Queue Run**, and inspect live stage status, attempt history, and bounded sanitized execution logs.
+3. See [`docs/PHASE3_4_SECRET_MANAGEMENT.md`](PHASE3_4_SECRET_MANAGEMENT.md), [`docs/PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md`](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md), [`docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`](PHASE3_6_KUBERNETES_DEPLOYMENT.md), and [`docs/PHASE3_7_RELEASE_HISTORY_ROLLBACK.md`](PHASE3_7_RELEASE_HISTORY_ROLLBACK.md) for dedicated `GITHUB_SOURCE`, `OCI_BUILDKIT`, and `KUBERNETES_DEPLOY` worker flags.
 
-> **Security Warning:** Local Docker daemon access on your workstation is privileged. CloudForge isolates execution containers with `--user 65534:65534`, `--cap-drop=ALL`, `no-new-privileges`, `--read-only`, `--network=none`, and CPU/memory/PID limits, and restricts execution strictly to compile-time allowlisted operations. Do **not** expose local Docker workers to untrusted multi-tenant repository code without microVM/sandbox isolation (e.g. gVisor, Kata Containers, or Firecracker).
+### B. Local Disposable OCI Registry
+```powershell
+docker run -d --rm --name cloudforge-local-registry -p 127.0.0.1:5000:5000 registry:2
+```
+
+### C. Disposable Local Kubernetes Cluster (K3s or kind)
+Follow [`infrastructure/kubernetes/README.md`](../infrastructure/kubernetes/README.md) to run a disposable `rancher/k3s` or `kind` cluster with an isolated temporary `KUBECONFIG`, provision a hardened namespace with `provision-local-namespace.ps1`/`.sh`, and verify least-privilege RBAC with `rbac-verification.ps1`/`.sh`.
+
+### D. Optional Phase 4 Monitoring Stack (Prometheus, Grafana, Alertmanager, OTel)
+Follow [`infrastructure/monitoring/README.md`](../infrastructure/monitoring/README.md) to configure external secret files and launch:
+```powershell
+docker compose -f compose.yaml -f compose.monitoring.yaml up -d --build
+```
 
 ---
 
-## 4. Running Automated Tests & Builds
+## 5. Running Automated Verification Suites
 
-### Backend (JUnit 5, MockMvc, Spring Security Test, Flyway, H2)
-
+### Backend (JUnit 5, MockMvc, Spring Security Test, Flyway, H2 + Optional Live PostgreSQL 17)
 ```powershell
 cd backend
 mvn -B test
-mvn -B clean package
+mvn -B package -DskipTests
+```
+To execute `PostgresSearchQueryRegressionTest` against a disposable PostgreSQL 17 container (never mutating your existing local database):
+```powershell
+docker run -d --rm --name cf-pg-test -e POSTGRES_DB=cloudforge -e POSTGRES_USER=cloudforge -e POSTGRES_PASSWORD=testpw -p 127.0.0.1:15432:5432 postgres:17-alpine
+$env:TEST_POSTGRES_URL = "jdbc:postgresql://127.0.0.1:15432/cloudforge"
+$env:TEST_POSTGRES_USER = "cloudforge"
+$env:TEST_POSTGRES_PASSWORD = "testpw"
+$env:TEST_POSTGRES_RUN_FLYWAY = "true"
+cd backend
+mvn -B test
+docker rm -f cf-pg-test
 ```
 
-Notes:
-- Backend tests run under the `test` Spring profile (`application-test.yml`) with Flyway migrations executed against H2 in PostgreSQL compatibility mode and Hibernate schema validation (`ddl-auto: validate`).
-- External GitHub API calls in `GitHubAppAndRepositoriesIntegrationTest` are mocked via `GitHubApiClient`; cryptographic JWT signing (`GitHubAppTokenServiceTest`) and webhook HMAC-SHA256 signature verification (`GitHubWebhookIntegrationTest`) execute real JCA/Nimbus/BouncyCastle crypto over ephemeral test keys and secrets.
-- Live PostgreSQL 17 Flyway migration execution is verified via Docker Compose (`docker compose up -d --build`).
+### Worker (Unit + Real Docker Isolation + Real BuildKit/Registry:2 + Optional K8s E2E)
+```powershell
+cd worker
+mvn -B test
+mvn -B package -DskipTests
+```
 
-### Frontend (Vitest, React Testing Library, TypeScript, Vite)
-
+### Frontend (TypeScript, Vitest + React Testing Library, Vite Production Build)
 ```powershell
 cd frontend
-npm test
+npm ci
 npm run typecheck
+npm test
 npm run build
 ```
 
----
-
-## 5. Verifying Degraded Database Handling
-
-To confirm `GET /api/health` still performs a real database check in Phase 2:
-
+### Docker Compose Config Validation
 ```powershell
-docker compose stop postgres
-curl -i http://localhost:8080/api/health   # Expect HTTP 503 DEGRADED
-docker compose start postgres
-curl -i http://localhost:8080/api/health   # Expect HTTP 200 UP
+docker compose config --quiet
 ```
 
 ---
 
-## 6. Logging & Security Debugging
-
-- Every HTTP response includes `X-Request-Id` propagated to SLF4J MDC (`req=<id>`).
-- Authentication tokens, OAuth client secrets, GitHub App private keys, and webhook signatures are never logged.
-- Increase application log verbosity locally via `LOG_LEVEL_APP=DEBUG` in `.env`.
-
----
-
-## 7. Common Troubleshooting
+## 6. Common Troubleshooting
 
 | Issue | Likely Cause | Fix |
 | --- | --- | --- |
-| Login screen says **GitHub OAuth Setup Required** | `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` are unset in `.env` | Follow [`docs/GITHUB_INTEGRATION.md`](GITHUB_INTEGRATION.md) to configure your OAuth App and restart the backend |
-| Repositories screen says **GitHub App Configuration Required** | `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, or private key unset | Configure GitHub App credentials in `.env` and restart the backend |
-| Mutating API call returns `403 Forbidden` | Missing/stale `X-XSRF-TOKEN` header or insufficient workspace role (`VIEWER`/`DEVELOPER`) | Ensure browser calls use `credentials: 'include'` with `X-XSRF-TOKEN`, or verify your workspace role in **Settings** |
-| Environment save returns `400 Bad Request` | Variable key or value matches secret pattern (`*SECRET*`, `*PASSWORD*`, `*TOKEN*`, etc.) | Remove secret values from Non-Secret Config and store them in **Encrypted Secrets** instead (requires `CLOUDFORGE_SECRETS_ENABLED=true` + external `CLOUDFORGE_SECRETS_KEYRING`, see [`docs/PHASE3_4_SECRET_MANAGEMENT.md`](PHASE3_4_SECRET_MANAGEMENT.md)) |
-| Secret create/rotate returns `503 Service Unavailable` | `CLOUDFORGE_SECRETS_ENABLED=false` or invalid/missing `CLOUDFORGE_SECRETS_KEYRING` | Provision valid 256-bit Base64 KEK(s) (`openssl rand -base64 32`) via environment variables and restart |
-| `compose.yaml` port bind failure on `5432` or `8080` | Another local PostgreSQL or Java service uses that port | Stop the conflicting service or override `POSTGRES_PORT` / `BACKEND_PORT` in `.env` |
-
-## Dedicated GitHub source, OCI BuildKit & Kubernetes deployment workers
-
-- **Phase 3.5 (Source & OCI BuildKit):** See the [OCI builds & registry runbook](PHASE3_5_CONTAINER_BUILDS_OCI_REGISTRY.md) for GitHub App permissions, BuildKit worker isolation, and local registry verification.
-- **Phase 3.6 (Kubernetes Deployment Engine):** By default, Kubernetes deployment execution is **disabled** (`CLOUDFORGE_K8S_ENABLED=false`, locked off in `application-render.yml`). Never mount kubeconfig files or install `kubectl` inside the Spring Boot web server. To run a dedicated local `KUBERNETES_DEPLOY` worker against a disposable local `kind`/`k3d`/`k3s` cluster, provision an isolated namespace via `infrastructure/kubernetes/local/provision-local-namespace.ps1` (or `.sh`), store the short-lived `cloudforge-deployer` bearer token in Phase 3.4 Encrypted Secrets, and follow the complete runbook in [`docs/PHASE3_6_KUBERNETES_DEPLOYMENT.md`](PHASE3_6_KUBERNETES_DEPLOYMENT.md).
-
-## Release history and rollback
-
-Use the [Phase 3.7 runbook](PHASE3_7_RELEASE_HISTORY_ROLLBACK.md) for release revision history, permissions, reconciliation, and disposable-cluster verification. Run matching control-plane and Kubernetes worker builds when verifying release operations.
+| Login screen says **GitHub OAuth Setup Required** | `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` unset | Configure your OAuth App in `.env` (`docs/GITHUB_INTEGRATION.md`) and restart backend |
+| Mutating API returns `403 Forbidden` | Missing/stale `X-XSRF-TOKEN` or insufficient RBAC role | Ensure `credentials: 'include'` + `X-XSRF-TOKEN` header and check role in **Settings** |
+| Environment save returns `400 Bad Request` | Key or value matches plaintext secret pattern | Store sensitive values in **Encrypted Environment Secrets** instead |
+| `PostgresSearchQueryRegressionTest` skipped locally | Local DB at `localhost:5432` is older than V11 and `TEST_POSTGRES_RUN_FLYWAY` is not `true` | Run against a disposable PostgreSQL 17 container with `TEST_POSTGRES_RUN_FLYWAY=true` |
+| `/actuator/prometheus` returns `403` or `404` | `monitoring` profile inactive or missing `>= 32`-char Bearer token | Activate `monitoring` profile and provide `cloudforge.monitoring.token` |
+| Production Kubernetes execution rejected (`409 Conflict`) | Missing, expired (>24h), or adverse signed Trivy/Cosign evidence | Run `infrastructure/supplychain/assess-image.sh` on a clean signed image and submit evidence as workspace `OWNER` |
